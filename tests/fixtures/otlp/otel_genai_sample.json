@@ -1,0 +1,122 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "service.name", "value": {"stringValue": "order-support-agent"}},
+          {"key": "service.version", "value": {"stringValue": "1.4.2"}},
+          {"key": "deployment.environment", "value": {"stringValue": "production"}},
+          {"key": "telemetry.sdk.name", "value": {"stringValue": "opentelemetry"}},
+          {"key": "telemetry.sdk.language", "value": {"stringValue": "python"}},
+          {"key": "telemetry.sdk.version", "value": {"stringValue": "1.27.0"}}
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "genai-agent-instrumentation",
+            "version": "0.3.1"
+          },
+          "spans": [
+            {
+              "traceId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+              "spanId": "aa11bb22cc33dd44",
+              "name": "invoke_agent order_support_agent",
+              "kind": "SPAN_KIND_INTERNAL",
+              "startTimeUnixNano": "1755000000000000000",
+              "endTimeUnixNano": "1755000001575000000",
+              "attributes": [
+                {"key": "gen_ai.operation.name", "value": {"stringValue": "invoke_agent"}},
+                {"key": "gen_ai.provider.name", "value": {"stringValue": "openai"}},
+                {"key": "gen_ai.agent.name", "value": {"stringValue": "order_support_agent"}},
+                {"key": "gen_ai.agent.id", "value": {"stringValue": "agent-order-support-001"}},
+                {"key": "gen_ai.agent.description", "value": {"stringValue": "Handles order status and return-policy questions"}},
+                {"key": "gen_ai.conversation.id", "value": {"stringValue": "conv-9f2a1c"}}
+              ],
+              "status": {"code": "STATUS_CODE_OK"}
+            },
+            {
+              "traceId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+              "spanId": "aa11bb22cc33dd45",
+              "parentSpanId": "aa11bb22cc33dd44",
+              "name": "chat gpt-4o-mini",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1755000000010000000",
+              "endTimeUnixNano": "1755000000390000000",
+              "attributes": [
+                {"key": "gen_ai.operation.name", "value": {"stringValue": "chat"}},
+                {"key": "gen_ai.provider.name", "value": {"stringValue": "openai"}},
+                {"key": "gen_ai.request.model", "value": {"stringValue": "gpt-4o-mini"}},
+                {"key": "gen_ai.response.model", "value": {"stringValue": "gpt-4o-mini-2024-07-18"}},
+                {"key": "gen_ai.request.temperature", "value": {"doubleValue": 0.2}},
+                {"key": "gen_ai.usage.input_tokens", "value": {"intValue": "412"}},
+                {"key": "gen_ai.usage.output_tokens", "value": {"intValue": "28"}},
+                {"key": "gen_ai.response.finish_reasons", "value": {"arrayValue": {"values": [{"stringValue": "tool_calls"}]}}},
+                {"key": "gen_ai.input.messages", "value": {"stringValue": "[{\"role\": \"system\", \"content\": \"You are a customer support agent for an online electronics retailer. Use the available tools to answer questions about orders and return eligibility.\"}, {\"role\": \"user\", \"content\": \"What's the status of order #48291, and can I return it?\"}]"}},
+                {"key": "gen_ai.output.messages", "value": {"stringValue": "[{\"role\": \"assistant\", \"tool_calls\": [{\"id\": \"call_7f3e9a2b\", \"type\": \"function\", \"function\": {\"name\": \"search_orders\", \"arguments\": \"{\\\"order_id\\\": \\\"48291\\\"}\"}}]}]"}}
+              ],
+              "status": {"code": "STATUS_CODE_OK"}
+            },
+            {
+              "traceId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+              "spanId": "aa11bb22cc33dd46",
+              "parentSpanId": "aa11bb22cc33dd44",
+              "name": "execute_tool search_orders",
+              "kind": "SPAN_KIND_INTERNAL",
+              "startTimeUnixNano": "1755000000395000000",
+              "endTimeUnixNano": "1755000000605000000",
+              "attributes": [
+                {"key": "gen_ai.operation.name", "value": {"stringValue": "execute_tool"}},
+                {"key": "gen_ai.tool.name", "value": {"stringValue": "search_orders"}},
+                {"key": "gen_ai.tool.call.id", "value": {"stringValue": "call_7f3e9a2b"}},
+                {"key": "gen_ai.tool.description", "value": {"stringValue": "Looks up an order by id and returns its status, item, and delivery date"}},
+                {"key": "gen_ai.tool.type", "value": {"stringValue": "function"}},
+                {"key": "gen_ai.tool.call.arguments", "value": {"stringValue": "{\"order_id\": \"48291\"}"}},
+                {"key": "gen_ai.tool.call.result", "value": {"stringValue": "{\"order_id\": \"48291\", \"status\": \"delivered\", \"delivered_at\": \"2026-07-30\", \"item\": \"Wireless Mouse\"}"}}
+              ],
+              "status": {"code": "STATUS_CODE_OK"}
+            },
+            {
+              "traceId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+              "spanId": "aa11bb22cc33dd47",
+              "parentSpanId": "aa11bb22cc33dd44",
+              "name": "retrieve_documents",
+              "kind": "SPAN_KIND_INTERNAL",
+              "startTimeUnixNano": "1755000000610000000",
+              "endTimeUnixNano": "1755000000950000000",
+              "attributes": [
+                {"key": "gen_ai.operation.name", "value": {"stringValue": "retrieve_documents"}},
+                {"key": "gen_ai.retrieval.query", "value": {"stringValue": "return policy for delivered electronics order"}},
+                {"key": "gen_ai.retrieval.document.count", "value": {"intValue": "2"}},
+                {"key": "gen_ai.retrieval.documents", "value": {"stringValue": "[{\"id\": \"policy-042\", \"score\": 0.91, \"content\": \"Items may be returned within 30 days of delivery if unused and in original packaging.\"}, {\"id\": \"policy-017\", \"score\": 0.78, \"content\": \"Electronics accessories, including mice and keyboards, follow the standard 30-day return window.\"}]"}}
+              ],
+              "status": {"code": "STATUS_CODE_OK"}
+            },
+            {
+              "traceId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+              "spanId": "aa11bb22cc33dd48",
+              "parentSpanId": "aa11bb22cc33dd44",
+              "name": "chat gpt-4o-mini",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1755000000955000000",
+              "endTimeUnixNano": "1755000001565000000",
+              "attributes": [
+                {"key": "gen_ai.operation.name", "value": {"stringValue": "chat"}},
+                {"key": "gen_ai.provider.name", "value": {"stringValue": "openai"}},
+                {"key": "gen_ai.request.model", "value": {"stringValue": "gpt-4o-mini"}},
+                {"key": "gen_ai.response.model", "value": {"stringValue": "gpt-4o-mini-2024-07-18"}},
+                {"key": "gen_ai.request.temperature", "value": {"doubleValue": 0.2}},
+                {"key": "gen_ai.usage.input_tokens", "value": {"intValue": "588"}},
+                {"key": "gen_ai.usage.output_tokens", "value": {"intValue": "64"}},
+                {"key": "gen_ai.response.finish_reasons", "value": {"arrayValue": {"values": [{"stringValue": "stop"}]}}},
+                {"key": "gen_ai.input.messages", "value": {"stringValue": "[{\"role\": \"tool\", \"tool_call_id\": \"call_7f3e9a2b\", \"content\": \"{\\\"order_id\\\": \\\"48291\\\", \\\"status\\\": \\\"delivered\\\", \\\"delivered_at\\\": \\\"2026-07-30\\\", \\\"item\\\": \\\"Wireless Mouse\\\"}\"}, {\"role\": \"system\", \"content\": \"Retrieved policy context: Items may be returned within 30 days of delivery if unused and in original packaging.\"}]"}},
+                {"key": "gen_ai.output.messages", "value": {"stringValue": "[{\"role\": \"assistant\", \"content\": \"Order #48291 (Wireless Mouse) was delivered on 2026-07-30. Since it's within the 30-day return window, you're eligible to return it for a full refund.\"}]"}}
+              ],
+              "status": {"code": "STATUS_CODE_OK"}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,136 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {"key": "service.name", "value": {"stringValue": "order-support-agent"}},
+          {"key": "service.version", "value": {"stringValue": "1.4.2"}},
+          {"key": "deployment.environment", "value": {"stringValue": "production"}},
+          {"key": "telemetry.sdk.name", "value": {"stringValue": "opentelemetry"}},
+          {"key": "telemetry.sdk.language", "value": {"stringValue": "python"}},
+          {"key": "telemetry.sdk.version", "value": {"stringValue": "1.27.0"}}
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "openinference.instrumentation.openai",
+            "version": "0.6.0"
+          },
+          "spans": [
+            {
+              "traceId": "b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2",
+              "spanId": "11aa22bb33cc44dd",
+              "name": "order_support_agent",
+              "kind": "SPAN_KIND_INTERNAL",
+              "startTimeUnixNano": "1755000000000000000",
+              "endTimeUnixNano": "1755000001575000000",
+              "attributes": [
+                {"key": "openinference.span.kind", "value": {"stringValue": "AGENT"}},
+                {"key": "input.value", "value": {"stringValue": "What's the status of order #48291, and can I return it?"}},
+                {"key": "output.value", "value": {"stringValue": "Order #48291 (Wireless Mouse) was delivered on 2026-07-30. Since it's within the 30-day return window, you're eligible to return it for a full refund."}},
+                {"key": "metadata", "value": {"stringValue": "{\"agent_name\": \"order_support_agent\", \"agent_id\": \"agent-order-support-001\"}"}}
+              ],
+              "status": {"code": "STATUS_CODE_OK"}
+            },
+            {
+              "traceId": "b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2",
+              "spanId": "11aa22bb33cc44de",
+              "parentSpanId": "11aa22bb33cc44dd",
+              "name": "ChatCompletion",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1755000000010000000",
+              "endTimeUnixNano": "1755000000390000000",
+              "attributes": [
+                {"key": "openinference.span.kind", "value": {"stringValue": "LLM"}},
+                {"key": "llm.system", "value": {"stringValue": "openai"}},
+                {"key": "llm.model_name", "value": {"stringValue": "gpt-4o-mini"}},
+                {"key": "llm.invocation_parameters", "value": {"stringValue": "{\"temperature\": 0.2, \"model\": \"gpt-4o-mini\"}"}},
+                {"key": "llm.input_messages.0.message.role", "value": {"stringValue": "system"}},
+                {"key": "llm.input_messages.0.message.content", "value": {"stringValue": "You are a customer support agent for an online electronics retailer. Use the available tools to answer questions about orders and return eligibility."}},
+                {"key": "llm.input_messages.1.message.role", "value": {"stringValue": "user"}},
+                {"key": "llm.input_messages.1.message.content", "value": {"stringValue": "What's the status of order #48291, and can I return it?"}},
+                {"key": "llm.output_messages.0.message.role", "value": {"stringValue": "assistant"}},
+                {"key": "llm.output_messages.0.message.tool_calls.0.tool_call.id", "value": {"stringValue": "call_7f3e9a2b"}},
+                {"key": "llm.output_messages.0.message.tool_calls.0.tool_call.function.name", "value": {"stringValue": "search_orders"}},
+                {"key": "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments", "value": {"stringValue": "{\"order_id\": \"48291\"}"}},
+                {"key": "llm.token_count.prompt", "value": {"intValue": "412"}},
+                {"key": "llm.token_count.completion", "value": {"intValue": "28"}},
+                {"key": "llm.token_count.total", "value": {"intValue": "440"}},
+                {"key": "llm.finish_reason", "value": {"stringValue": "tool_calls"}}
+              ],
+              "status": {"code": "STATUS_CODE_OK"}
+            },
+            {
+              "traceId": "b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2",
+              "spanId": "11aa22bb33cc44df",
+              "parentSpanId": "11aa22bb33cc44dd",
+              "name": "search_orders",
+              "kind": "SPAN_KIND_INTERNAL",
+              "startTimeUnixNano": "1755000000395000000",
+              "endTimeUnixNano": "1755000000605000000",
+              "attributes": [
+                {"key": "openinference.span.kind", "value": {"stringValue": "TOOL"}},
+                {"key": "tool.name", "value": {"stringValue": "search_orders"}},
+                {"key": "tool.description", "value": {"stringValue": "Looks up an order by id and returns its status, item, and delivery date"}},
+                {"key": "tool.parameters", "value": {"stringValue": "{\"type\": \"object\", \"properties\": {\"order_id\": {\"type\": \"string\"}}, \"required\": [\"order_id\"]}"}},
+                {"key": "tool.id", "value": {"stringValue": "call_7f3e9a2b"}},
+                {"key": "input.value", "value": {"stringValue": "{\"order_id\": \"48291\"}"}},
+                {"key": "output.value", "value": {"stringValue": "{\"order_id\": \"48291\", \"status\": \"delivered\", \"delivered_at\": \"2026-07-30\", \"item\": \"Wireless Mouse\"}"}}
+              ],
+              "status": {"code": "STATUS_CODE_OK"}
+            },
+            {
+              "traceId": "b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2",
+              "spanId": "11aa22bb33cc44e0",
+              "parentSpanId": "11aa22bb33cc44dd",
+              "name": "retrieve_policy_documents",
+              "kind": "SPAN_KIND_INTERNAL",
+              "startTimeUnixNano": "1755000000610000000",
+              "endTimeUnixNano": "1755000000950000000",
+              "attributes": [
+                {"key": "openinference.span.kind", "value": {"stringValue": "RETRIEVER"}},
+                {"key": "input.value", "value": {"stringValue": "return policy for delivered electronics order"}},
+                {"key": "retrieval.documents.0.document.id", "value": {"stringValue": "policy-042"}},
+                {"key": "retrieval.documents.0.document.content", "value": {"stringValue": "Items may be returned within 30 days of delivery if unused and in original packaging."}},
+                {"key": "retrieval.documents.0.document.score", "value": {"doubleValue": 0.91}},
+                {"key": "retrieval.documents.1.document.id", "value": {"stringValue": "policy-017"}},
+                {"key": "retrieval.documents.1.document.content", "value": {"stringValue": "Electronics accessories, including mice and keyboards, follow the standard 30-day return window."}},
+                {"key": "retrieval.documents.1.document.score", "value": {"doubleValue": 0.78}}
+              ],
+              "status": {"code": "STATUS_CODE_OK"}
+            },
+            {
+              "traceId": "b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2",
+              "spanId": "11aa22bb33cc44e1",
+              "parentSpanId": "11aa22bb33cc44dd",
+              "name": "ChatCompletion",
+              "kind": "SPAN_KIND_CLIENT",
+              "startTimeUnixNano": "1755000000955000000",
+              "endTimeUnixNano": "1755000001565000000",
+              "attributes": [
+                {"key": "openinference.span.kind", "value": {"stringValue": "LLM"}},
+                {"key": "llm.system", "value": {"stringValue": "openai"}},
+                {"key": "llm.model_name", "value": {"stringValue": "gpt-4o-mini"}},
+                {"key": "llm.invocation_parameters", "value": {"stringValue": "{\"temperature\": 0.2, \"model\": \"gpt-4o-mini\"}"}},
+                {"key": "llm.input_messages.0.message.role", "value": {"stringValue": "system"}},
+                {"key": "llm.input_messages.0.message.content", "value": {"stringValue": "You are a customer support agent for an online electronics retailer."}},
+                {"key": "llm.input_messages.1.message.role", "value": {"stringValue": "tool"}},
+                {"key": "llm.input_messages.1.message.content", "value": {"stringValue": "{\"order_id\": \"48291\", \"status\": \"delivered\", \"delivered_at\": \"2026-07-30\", \"item\": \"Wireless Mouse\"}"}},
+                {"key": "llm.input_messages.2.message.role", "value": {"stringValue": "system"}},
+                {"key": "llm.input_messages.2.message.content", "value": {"stringValue": "Retrieved policy context: Items may be returned within 30 days of delivery if unused and in original packaging."}},
+                {"key": "llm.output_messages.0.message.role", "value": {"stringValue": "assistant"}},
+                {"key": "llm.output_messages.0.message.content", "value": {"stringValue": "Order #48291 (Wireless Mouse) was delivered on 2026-07-30. Since it's within the 30-day return window, you're eligible to return it for a full refund."}},
+                {"key": "llm.token_count.prompt", "value": {"intValue": "588"}},
+                {"key": "llm.token_count.completion", "value": {"intValue": "64"}},
+                {"key": "llm.token_count.total", "value": {"intValue": "652"}},
+                {"key": "llm.finish_reason", "value": {"stringValue": "stop"}}
+              ],
+              "status": {"code": "STATUS_CODE_OK"}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

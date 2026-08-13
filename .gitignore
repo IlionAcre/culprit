@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Agent-facing scaffolding, not published content
+AI_docs
+
 # Secrets
 .env
 .env.*
