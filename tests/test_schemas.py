@@ -83,18 +83,50 @@ def test_span_payload_is_a_plain_union_not_a_discriminated_one():
 def test_retrieval_and_agent_payloads_construct_from_their_documented_fields():
     retrieval = RetrievalPayload(
         query="refund policy",
-        documents=[RetrievedDoc(doc_id="d1", text="policy text", score=0.9)],
+        documents=[RetrievedDoc(doc_id="d1", content_len=11, content_preview="policy text", score=0.9)],
         top_k=3,
     )
     agent = AgentPayload(
         agent_name="planner", role="orchestrator",
-        input_text="refund order 88213", output_text="delegating to billing",
-        delegated_to="billing_agent",
+        input_text="refund order 88213", output_text="delegating",
+        delegated_to=["billing_agent"],
     )
 
     assert retrieval.top_k == 3
     assert retrieval.documents[0].doc_id == "d1"
-    assert agent.delegated_to == "billing_agent"
+    assert agent.delegated_to == ["billing_agent"]
+
+
+def test_retrieved_doc_stores_length_and_preview_instead_of_full_document_text():
+    """unused_retrieval (L1 retrieval.py) only needs a size signal, and
+    retrieval payloads are the largest thing in a trace persisted to JSONB
+    on every span, so full document text is deliberately not a field here."""
+    doc = RetrievedDoc(doc_id="d1", content_len=42000, content_preview="policy text...")
+
+    assert not hasattr(doc, "text")
+    assert doc.content_len == 42000
+    assert doc.content_preview == "policy text..."
+
+
+def test_agent_payload_delegated_to_supports_duplicate_delegation_detection():
+    """duplicate_delegation (L1 flow.py) needs to see two delegations to the
+    same target from one step; a scalar field could not represent that."""
+    agent = AgentPayload(
+        agent_name="planner", role="orchestrator",
+        input_text="refund and notify", output_text="delegating twice",
+        delegated_to=["billing_agent", "billing_agent"],
+    )
+
+    assert agent.delegated_to.count("billing_agent") == 2
+
+
+def test_agent_payload_delegated_to_defaults_to_an_empty_list():
+    agent = AgentPayload(
+        agent_name="planner", role="orchestrator",
+        input_text="answer directly", output_text="no delegation needed",
+    )
+
+    assert agent.delegated_to == []
 
 
 def test_llm_payload_carries_tool_calls_as_typed_requests():
@@ -103,7 +135,10 @@ def test_llm_payload_carries_tool_calls_as_typed_requests():
         request_messages=[Message(role="user", content="refund it")],
         response_messages=[Message(role="assistant", content="")],
         tool_calls=[
-            ToolCallRequest(call_id="c1", tool_name="refund_order", arguments={"order_id": "88213"})
+            ToolCallRequest(
+                call_id="c1", tool_name="refund_order",
+                arguments={"order_id": "88213"}, arguments_json='{"order_id": "88213"}',
+            )
         ],
         finish_reason="tool_calls",
         prompt_tokens=120,
@@ -111,7 +146,56 @@ def test_llm_payload_carries_tool_calls_as_typed_requests():
     )
 
     assert payload.tool_calls[0].tool_name == "refund_order"
+    assert payload.tool_calls[0].arguments_json == '{"order_id": "88213"}'
     assert payload.finish_reason == "tool_calls"
+
+
+def test_tool_call_request_carries_raw_arguments_json_for_malformed_argument_detection():
+    """tool_arg_malformed (L1 schema.py) flags arguments that fail to parse;
+    once `arguments` is empty or a best-effort partial, arguments_json is
+    the only remaining evidence of what was actually malformed."""
+    call = ToolCallRequest(
+        call_id="c1", tool_name="refund_order", arguments={},
+        arguments_json='{"order_id": 88213,}',  # trailing comma, invalid JSON
+    )
+
+    assert call.arguments == {}
+    assert call.arguments_json == '{"order_id": 88213,}'
+
+
+def test_llm_payload_total_and_max_tokens_support_context_overflow_detection():
+    """context_overflow (L1 context.py) fires when
+    total_tokens >= 0.9 * max_tokens, so both must be readable straight off
+    the payload without the detector maintaining its own model table."""
+    payload = LlmPayload(
+        provider="openai", model="gpt-4o",
+        request_messages=[Message(role="user", content="long context")],
+        response_messages=[Message(role="assistant", content="ok")],
+        total_tokens=117000, max_tokens=128000,
+    )
+
+    assert payload.total_tokens >= 0.9 * payload.max_tokens
+
+
+def test_message_content_may_be_none_for_a_pure_tool_call_assistant_turn():
+    """A str-only content type rejected this normal shape: an assistant
+    message that only calls a tool and says nothing."""
+    message = Message(role="assistant", content=None)
+
+    assert message.content is None
+
+
+def test_message_tool_call_id_and_name_thread_a_result_back_to_its_request():
+    request = Message(
+        role="assistant", content=None,
+    )
+    result = Message(
+        role="tool", content="order not found", tool_call_id="c1", name="refund_order",
+    )
+
+    assert request.content is None
+    assert result.tool_call_id == "c1"
+    assert result.name == "refund_order"
 
 
 def test_step_collapses_framework_spans_into_collapsed_span_ids():

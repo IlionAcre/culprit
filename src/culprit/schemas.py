@@ -55,18 +55,35 @@ class Outcome(StrEnum):
 
 class Message(BaseModel):
     role: str
-    content: str
+    # None, not "": a pure tool-call assistant turn with no text is a
+    # normal shape, and str-only rejected it outright.
+    content: str | None = None
+    # Threads a tool-role message back to the ToolCallRequest.call_id that
+    # produced it, so tool results and their triggering calls can be paired.
+    tool_call_id: str | None = None
+    # Tool name on a tool-role message, readable without re-joining through
+    # tool_call_id.
+    name: str | None = None
 
 
 class ToolCallRequest(BaseModel):
     call_id: str
     tool_name: str
     arguments: dict[str, Any]
+    # Raw unparsed arguments string. Needed by tool_arg_malformed (L1
+    # schema.py): once a bad payload fails to parse into `arguments`, this
+    # raw string is the only evidence of what was actually malformed.
+    arguments_json: str | None = None
 
 
 class RetrievedDoc(BaseModel):
     doc_id: str
-    text: str
+    # Length plus a bounded preview, not full text: retrieval payloads are
+    # the largest thing in a trace and this rides on every span persisted
+    # to JSONB. unused_retrieval (L1 retrieval.py) only needs the size
+    # signal; excerpts only ever need a short preview.
+    content_len: int
+    content_preview: str
     score: float | None = None
 
 
@@ -79,6 +96,12 @@ class LlmPayload(BaseModel):
     finish_reason: str | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    # total_tokens (reported prompt+completion count) and max_tokens (the
+    # model's context window, as reported by the provider/tracer) are what
+    # let context_overflow (L1 context.py) fire on total_tokens >= 0.9 *
+    # max_tokens without hardcoding a per-model context-window table.
+    total_tokens: int | None = None
+    max_tokens: int | None = None
     temperature: float | None = None
     response_format_schema: dict[str, Any] | None = None
 
@@ -108,7 +131,11 @@ class AgentPayload(BaseModel):
     role: str
     input_text: str
     output_text: str
-    delegated_to: str | None = None
+    # A list, not a scalar, because a single AGENT step can fan out to
+    # several sub-agents in one delegation call. duplicate_delegation (L1
+    # flow.py) needs to see repeats within this list; a str | None field
+    # could not represent more than one delegate at all, let alone a repeat.
+    delegated_to: list[str] = Field(default_factory=list)
 
 
 class Span(BaseModel):
