@@ -1,0 +1,50 @@
+# culprit's own configuration. Uncomment and adjust any of these to override
+# culprit's defaults for this project. CLI flags, where available, still
+# override this file; this file overrides the hardcoded defaults shown
+# below. This file is deliberately standalone (not a [tool.culprit] section
+# in pyproject.toml), so it reads as culprit's own self-contained
+# documentation with no wrapper section needed.
+
+# Connections
+# database_url = "postgresql://localhost:5432/culprit"
+# redis_url = "redis://localhost:6379/0"
+
+# L3 adjudication model. Per-deployment configurable: run a cheap model in
+# production and a frontier model only for benchmark runs by changing this
+# one line, no code change required.
+# model = "gemini/gemini-2.5-flash-lite"
+
+# L3 candidate merge and abstention gates
+# max_candidates = 5
+# min_confidence = 0.55
+# ambiguity_margin = 0.08
+
+# Fan-out width for ThreadPoolExecutor(...).map() calls (L3 adjudication,
+# per-item work generally)
+# max_workers = 4
+
+# L2 contrastive reference pool resolution
+# min_reference_runs = 3
+# max_reference_runs = 25
+# reference_cosine_max = 0.18
+
+# L3 context packet hard cap, in tokens
+# context_token_budget = 12000
+
+# L2 divergence scoring: consecutive steps within this score collapse to the
+# earliest (earliest-of-plateau collapse)
+# plateau_eps = 0.05
+
+# L5 clustering: shared by traces.task_embedding and diagnoses.card_embedding
+# embedding_model = "BAAI/bge-small-en-v1.5"
+# min_cluster_size = 5
+
+# Retention: culprit prune --older-than <retention_days> empties
+# spans.attributes for traces ingested more than this many days ago
+# retention_days = 90
+
+# Logging
+# log_file = "logs/culprit.jsonl"
+# log_level = "INFO"
+# log_max_bytes = 5000000
+# log_backup_count = 3
