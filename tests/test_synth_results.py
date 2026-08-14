@@ -81,11 +81,16 @@ def test_make_diagnosis_accepts_nested_signal_and_divergence_overrides():
     assert diagnosis.divergences[0].step_index == 3
 
 
-def test_layer_stubs_raise_not_implemented_with_their_owner_named():
-    """The stub message tells whoever hits it which workstream owns the
-    gap, so it reads as a known Phase 0 boundary rather than a bug."""
-    with pytest.raises(NotImplementedError, match="WS-D"):
-        contrast(None, [], neighbor_fn=lambda v, k: [], conn_fn=lambda: None)
+def test_contrast_is_implemented_and_abstains_cleanly_with_no_references():
+    """WS-D landed (unlike run_detectors/adjudicate/cluster below, still
+    Phase 1 stubs): `contrast()` no longer raises `NotImplementedError`.
+    An empty neighbor pool is exactly the "insufficient_references"
+    abstention path, not a crash - `trace=None` is safe here only because
+    zero steps short-circuits before `trace` is ever read."""
+    result = contrast(None, [], neighbor_fn=lambda v, k: [], conn_fn=lambda: None)
+
+    assert result.abstained
+    assert result.abstain_reason == "empty_trace"
 
 
 def test_run_detectors_returns_empty_on_an_empty_trace():
