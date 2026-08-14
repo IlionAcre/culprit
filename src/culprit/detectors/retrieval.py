@@ -1,16 +1,20 @@
 """unused_retrieval, low_score_retrieval, goal_token_drift.
 
-The plan's catalogue wording for `unused_retrieval` is "<15% token overlap
-with next prompt". This synth generator never actually stitches retrieved
-content into any later prompt (every LLM call is an independent,
-hand-authored instruction string, not an accumulating conversation), so a
-literal next-prompt overlap check would fire on every retrieval in every
-trace, clean or not: there would be nothing to compare against. Both
-retrieval detectors below instead measure the retrieval *query*'s own
-coverage against, respectively, the retrieved documents and the task goal,
-which is the same "was this retrieval actually about what we were doing"
-question, answered against data this fixture actually populates. See the
-final report for this called out explicitly as a spec/fixture mismatch.
+**`unused_retrieval` restored to the catalogue's specified overlap test
+(Foundation amendment, post-WS-D handoff).** The plan's wording is "<15%
+token overlap with next prompt". This detector originally could not
+implement that literally: `synth.py`'s LLM prompts were independent
+hand-authored strings that never incorporated retrieved content, so a
+literal next-prompt check would have fired on every retrieval, clean or
+not - there was nothing in the next prompt to compare against. It was
+reimplemented as query-vs-document coverage instead (the same "was this
+retrieval actually about what we were doing" question, answered against
+data the fixture actually populated). Now that `synth.py` folds a
+retriever step's documents into the immediately following LLM step's
+request message (see `synth.py`'s module docstring), the next prompt has
+real content to compare against, so this reverts to comparing retrieved
+documents against `DetectorContext.step_text` of the next step - the
+literal "next prompt" the spec asks for.
 """
 
 from culprit.detectors.base import DetectorContext, tokens, truncate
@@ -32,8 +36,11 @@ def _coverage(reference: frozenset[str], candidate: frozenset[str]) -> float:
 
 
 def unused_retrieval(ctx: DetectorContext) -> list[Signal]:
-    """The retrieval query's own vocabulary barely appears anywhere in what
-    was retrieved: the documents are not actually about the query."""
+    """The retrieved documents' own vocabulary barely appears in the next
+    prompt: the documents were fetched but never actually referenced in
+    what the agent went on to ask the model. Catalogue spec: <15% token
+    overlap with the next prompt. A retrieval step with no following LLM
+    step (nothing left to check) is skipped rather than flagged."""
     signals = []
     for step in ctx.steps:
         if step.kind != SpanKind.RETRIEVER:
@@ -44,12 +51,19 @@ def unused_retrieval(ctx: DetectorContext) -> list[Signal]:
         p = span.payload
         if not p.documents:
             continue
+        next_step = next(
+            (s for s in ctx.steps if s.step_index > step.step_index and s.kind == SpanKind.LLM),
+            None,
+        )
+        if next_step is None:
+            continue
         doc_terms = tokens(" ".join(d.content_preview for d in p.documents))
-        if _coverage(tokens(p.query), doc_terms) < _COVERAGE_THRESHOLD:
+        next_prompt_terms = tokens(ctx.step_text[next_step.step_index])
+        if _coverage(doc_terms, next_prompt_terms) < _COVERAGE_THRESHOLD:
             signals.append(Signal(
                 detector="unused_retrieval", step_index=step.step_index, span_id=step.span_id,
                 severity=0.45, category=FailureClass.RETRIEVAL_MISS.value,
-                message="Retrieved documents share almost no vocabulary with the query that fetched them",
+                message="Retrieved documents share almost no vocabulary with the next prompt",
                 evidence=[Evidence(
                     span_id=step.span_id, step_index=step.step_index, field="payload.documents",
                     excerpt=truncate(" | ".join(d.content_preview for d in p.documents)),
