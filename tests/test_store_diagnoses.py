@@ -1,24 +1,23 @@
-"""Tests for `store_diagnoses.py`. Same two-tier split as
-`test_store_traces.py`: offline tests against hand-shaped rows and a fake
-connection, plus `@requires_db` tests proving the real thing, skipping
-cleanly when `CULPRIT_TEST_DSN` is unset.
+"""Tests for `store_diagnoses.py` (the `Diagnosis` write/read round trip).
+Cluster-assignment-bridge tests (`write_cluster_assignments`) live in
+`test_store_clusters.py`, mirroring the `store_diagnoses.py` /
+`store_clusters.py` module split. Same two-tier structure: offline tests
+against hand-shaped rows and a fake connection, plus `@requires_db` tests
+proving the real thing, skipping cleanly when `CULPRIT_TEST_DSN` is unset.
 """
 
 import contextlib
-import uuid
+import datetime as dt
 
 import pytest
 
 from culprit.signals import Evidence
 from culprit.store_diagnoses import (
     _adjudication_from_row,
-    _cluster_ids_for,
-    _cluster_sizes,
     _divergence_from_row,
     _signal_from_row,
     read_all_diagnoses,
     read_diagnoses,
-    write_cluster_assignments,
     write_diagnosis,
 )
 from culprit.synth_results import make_diagnosis, make_divergence, make_signal
@@ -192,7 +191,7 @@ def test_read_diagnoses_assembles_signals_and_divergences_by_diagnosis_id():
     diagnosis_row = {
         "diagnosis_id": "d-1",
         "trace_id": "trace-1",
-        "created_at": None,
+        "created_at": dt.datetime.now(dt.UTC),
         "root_cause_step_index": 2,
         "root_cause_span_id": "s2",
         "failure_class": "tool_error",
@@ -218,9 +217,6 @@ def test_read_diagnoses_assembles_signals_and_divergences_by_diagnosis_id():
         "evidence": [],
         "error": None,
     }
-    import datetime as dt
-
-    diagnosis_row["created_at"] = dt.datetime.now(dt.UTC)
 
     conn = _FakeConnection(results=[[diagnosis_row], [signal_row], [], []])
 
@@ -243,58 +239,6 @@ def test_read_all_diagnoses_queries_without_a_trace_id_filter():
     assert "FROM diagnoses" in sql
     assert "WHERE" not in sql
     assert result == []
-
-
-# --- offline: cluster assignment bridge (pure logic) ----------------------
-
-
-def test_cluster_ids_for_maps_each_distinct_non_noise_label_deterministically():
-    run_id = uuid.uuid4()
-    assignment = {"d1": 0, "d2": 0, "d3": 1, "d4": -1}
-
-    cluster_ids = _cluster_ids_for(run_id, assignment)
-
-    assert set(cluster_ids.keys()) == {0, 1}
-    assert cluster_ids[0] == uuid.uuid5(run_id, "0")
-    # same run_id + label always yields the same cluster_id, deterministically
-    assert _cluster_ids_for(run_id, assignment)[0] == cluster_ids[0]
-
-
-def test_cluster_ids_for_excludes_the_noise_label():
-    run_id = uuid.uuid4()
-    assignment = {"d1": -1, "d2": -1}
-
-    assert _cluster_ids_for(run_id, assignment) == {}
-
-
-def test_cluster_sizes_counts_only_non_noise_labels():
-    assignment = {"d1": 0, "d2": 0, "d3": 1, "d4": -1}
-
-    assert _cluster_sizes(assignment) == {0: 2, 1: 1}
-
-
-def test_write_cluster_assignments_is_a_noop_on_an_empty_assignment():
-    conn = _FakeConnection()
-
-    write_cluster_assignments(_conn_fn(conn), {})
-
-    assert conn.cur.calls == []
-
-
-def test_write_cluster_assignments_writes_cluster_rows_and_updates_diagnoses():
-    conn = _FakeConnection()
-    assignment = {"d1": 0, "d2": 0, "d3": -1}
-
-    write_cluster_assignments(_conn_fn(conn), assignment)
-
-    sql_calls = [sql for sql, _ in conn.cur.calls]
-    cluster_insert = next(c for c in conn.cur.calls if "INSERT INTO clusters" in c[0])
-    diagnosis_update = next(c for c in conn.cur.calls if "UPDATE diagnoses" in c[0])
-
-    assert len(cluster_insert[1]) == 1  # one distinct non-noise label (0)
-    assert len(diagnosis_update[1]) == 3  # every diagnosis gets an update, including noise -> NULL
-    noise_row = next(row for row in diagnosis_update[1] if row[1] == "d3")
-    assert noise_row[0] is None
 
 
 # --- requires_db: real round trips ---------------------------------------
@@ -366,28 +310,3 @@ def test_read_all_diagnoses_returns_diagnoses_across_traces(db_conn_fn):
     result = read_all_diagnoses(db_conn_fn)
 
     assert {d.trace_id for d in result} == {"trace-db-1", "trace-db-2"}
-
-
-@requires_db
-def test_write_cluster_assignments_round_trips_into_clusters_and_diagnoses_cluster_id(db_conn_fn):
-    d1 = make_diagnosis(trace_id="trace-db-1")
-    d2 = make_diagnosis(trace_id="trace-db-1")
-    write_diagnosis(db_conn_fn, d1)
-    write_diagnosis(db_conn_fn, d2)
-
-    write_cluster_assignments(db_conn_fn, {d1.diagnosis_id: 0, d2.diagnosis_id: -1})
-
-    with db_conn_fn().cursor() as cur:
-        cur.execute(
-            "SELECT diagnosis_id, cluster_id FROM diagnoses WHERE diagnosis_id = ANY(%s)",
-            ([d1.diagnosis_id, d2.diagnosis_id],),
-        )
-        rows = {str(diag_id): cluster_id for diag_id, cluster_id in cur.fetchall()}
-
-    assert rows[d1.diagnosis_id] is not None  # clustered (label 0)
-    assert rows[d2.diagnosis_id] is None  # noise (label -1) -> no cluster
-
-    with db_conn_fn().cursor() as cur:
-        cur.execute("SELECT size FROM clusters")
-        (size,) = cur.fetchone()
-    assert size == 1

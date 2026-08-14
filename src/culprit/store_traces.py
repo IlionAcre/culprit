@@ -1,17 +1,18 @@
-"""Trace/Span/Step persistence: bulk write, full read, the pgvector
-nearest-successful-neighbor query that backs WS-D's injected `NeighborFn`
-(`signals.NeighborFn`), and the attributes retention policy.
+"""Trace/Span/Step round trip: bulk write and full read. Analytical queries
+over already-persisted traces (`nearest_successful`, `prune_attributes`) live
+in the sibling `store_traces_query.py` - a deliberate split, not the original
+shape: this pair started as one 324-line module and grew past the ~200-line
+module ceiling once the contract widened. Write/read round-trip is one
+concern with one reason to change (the shape of `Trace`/`Span`/`Step`);
+`nearest_successful`/`prune_attributes` are read-only analytical queries with
+a different reason to change (index strategy, retention policy) and touch
+none of the write path. Splitting there, not elsewhere, keeps each module
+holdable in one read.
 
 Connection lifecycle: every function calls `conn_fn()` once and does all its
 work on that connection, writes wrapped in `with conn.transaction():` so a
 failure partway through never leaves a trace half-persisted. Never calls
 `psycopg.connect`/`make_pool` directly (see `db.py`); callers own pooling.
-
-**`nearest_successful(conn_fn, embedding, k)` is the concrete `NeighborFn`**
-once `conn_fn` is bound, e.g. `functools.partial(nearest_successful, conn_fn)`.
-It is deliberately not `Callable[[list[float], int], list[str]]` itself
-(`ConnFn` is not part of that alias, see `signals.py`), so binding is the
-caller's job, matching `contrast.py`'s injected `neighbor_fn` parameter.
 
 **Ingestion composition (`otlp.decode` -> `normalize_span` -> `linearize` ->
 `write_trace`) is deliberately NOT assembled here.** Not in this workstream's
@@ -104,10 +105,21 @@ def _span_from_row(row: dict[str, Any]) -> Span:
 
 
 def _step_from_row(row: dict[str, Any]) -> Step:
-    # actor/summary are NOT NULL on the Step model but nullable columns in
-    # the steps DDL. Defaulted to "" defensively rather than raising a
-    # pydantic ValidationError on a row write_trace itself would never
-    # produce (schema/model looseness noted in the workstream report).
+    """`actor`/`summary` are `NOT NULL`-required `str` on the `Step` model
+    (schemas.py) but nullable columns in the steps DDL (revision 0001).
+    Defaulted to `""` defensively here rather than raising a pydantic
+    `ValidationError`, on a row `write_trace` itself would never produce.
+
+    **Integration recommendation for revision 0002: tighten the DDL, don't
+    loosen the model.** `linearize.py` (WS-A) always derives a concrete actor
+    and summary string for every `Step` it builds - there is no code path
+    that legitimately produces a `Step` with an unknown actor, unlike e.g.
+    `Trace.task_goal`, which is genuinely optional pre-normalization. The
+    columns being nullable looks like an oversight in the original hand-written
+    DDL, not a deliberate looser-than-the-model decision, so revision 0002
+    should add `NOT NULL` to `steps.actor` and `steps.summary` (after
+    backfilling any existing NULLs to `''`) rather than the model gaining
+    `str | None`."""
     return Step(
         trace_id=row["trace_id"],
         step_index=row["step_index"],
@@ -277,48 +289,3 @@ def read_trace(conn_fn: ConnFn, trace_id: str) -> tuple[Trace | None, list[Span]
         steps = [_step_from_row(r) for r in cur.fetchall()]
 
     return trace, spans, steps
-
-
-def nearest_successful(conn_fn: ConnFn, embedding: list[float], k: int) -> list[str]:
-    """Successful traces nearest `embedding` by cosine distance
-    (`vector <=> vector`), nearest first. `outcome = 'success'` is an
-    explicit filter, not incidental: it is what lets this query use the
-    partial HNSW index on `traces.task_embedding` (`WHERE outcome =
-    'success'`, deferred to revision 0002 per CLAUDE.md) once it exists.
-    Dropping the filter would still be correct today (no index exists yet)
-    but would silently stop using the index the day it lands."""
-    conn = conn_fn()
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT trace_id FROM traces
-            WHERE outcome = %s AND task_embedding IS NOT NULL
-            ORDER BY task_embedding <=> %s
-            LIMIT %s
-            """,
-            (Outcome.SUCCESS.value, embedding, k),
-        )
-        return [row[0] for row in cur.fetchall()]
-
-
-def prune_attributes(conn_fn: ConnFn, older_than_days: int) -> int:
-    """Empties `spans.attributes` and sets `attributes_pruned = true` for
-    spans belonging to a trace ingested more than `older_than_days` ago.
-    Returns the number of spans updated. Never touches `payload`, `steps`,
-    `signals`, `divergences`, or `diagnoses` - those tables are not
-    referenced by this query at all, by construction, not by care taken not
-    to update them."""
-    conn = conn_fn()
-    with conn.transaction():
-        cur = conn.execute(
-            """
-            UPDATE spans SET attributes = '{}'::jsonb, attributes_pruned = true
-            WHERE attributes_pruned = false
-              AND trace_id IN (
-                  SELECT trace_id FROM traces
-                  WHERE ingested_at < now() - make_interval(days => %s)
-              )
-            """,
-            (older_than_days,),
-        )
-        return cur.rowcount

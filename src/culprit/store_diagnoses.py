@@ -2,22 +2,35 @@
 `divergences`, and `adjudications` rows, written and reassembled together so
 a `Diagnosis` round-trips whole.
 
-Also home to the two functions `jobs.py`'s own module docstring names as its
-best guess for operations no contract covered - `read_all_diagnoses` (batch
-reclustering reader) and `write_cluster_assignments` (persists L5's output) -
-matched here exactly, not renamed, so WS-G's `_seam()` resolves both without
-an integration-time handshake.
+Persisting the batch-clustering output (`write_cluster_assignments`) lives in
+the sibling `store_clusters.py`, split out once this pair grew past the
+~200-line module ceiling: reading/writing a `Diagnosis` is one concern with
+one reason to change (the shape of `Diagnosis`/`Signal`/`DivergenceCandidate`/
+`Adjudication`), while the cluster-assignment writer is a bridge over a real
+type mismatch between L5's output and the `clusters`/`diagnoses.cluster_id`
+schema, with a different reason to change (WS-F's not-yet-built
+`run_id`/labeling lifecycle) - see that module's docstring.
 
 `diagnoses.card_text` / `card_embedding` / `cluster_id` are storage-only
 columns with no counterpart on the `Diagnosis` model, same pattern as
 `traces.task_embedding` (`schemas.py`). `write_diagnosis` leaves all three
-NULL; `write_cluster_assignments` is the only writer of `cluster_id`.
-`card_text`/`card_embedding` have no writer here at all - rendering and
-embedding the card is `cluster_embed.py`'s job (WS-F, not built yet),
-flagged as an Integration item rather than guessed at.
+NULL; `store_clusters.write_cluster_assignments` is the only writer of
+`cluster_id`. `card_text`/`card_embedding` have no writer anywhere in this
+codebase yet - rendering and embedding the card is `cluster_embed.py`'s job
+(WS-F, not built yet), flagged as an Integration item rather than guessed at.
+
+**Compatibility re-export, temporary.** `jobs.py` (WS-G, not owned by this
+workstream) hardcodes `_seam("store_diagnoses", "write_cluster_assignments",
+...)` - it was written when this module was one file. The real
+implementation now lives in `store_clusters.py`; the import below only keeps
+`jobs.py`'s existing seam name resolving (and `tests/test_jobs.py`'s
+`monkeypatch.setattr("culprit.store_diagnoses.write_cluster_assignments",
+...)` working unchanged) without editing `jobs.py`, which this workstream
+does not own. **Integration item**: repoint `jobs.py`'s `_default_cluster_writer`
+at `_seam("store_clusters", "write_cluster_assignments", ...)` directly, then
+delete this re-export.
 """
 
-import uuid
 from dataclasses import asdict
 from typing import Any
 
@@ -26,6 +39,7 @@ from psycopg.types.json import Jsonb
 
 from culprit.db import ConnFn
 from culprit.signals import Adjudication, Diagnosis, DivergenceCandidate, Evidence, Signal
+from culprit.store_clusters import write_cluster_assignments as write_cluster_assignments  # noqa: F401
 
 
 def write_diagnosis(conn_fn: ConnFn, diagnosis: Diagnosis) -> None:
@@ -291,66 +305,3 @@ def read_all_diagnoses(conn_fn: ConnFn) -> list[Diagnosis]:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute("SELECT * FROM diagnoses ORDER BY created_at")
         return _assemble(cur, cur.fetchall())
-
-
-def _cluster_uuid(run_id: uuid.UUID, label: int) -> uuid.UUID:
-    return uuid.uuid5(run_id, str(label))
-
-
-def _cluster_ids_for(run_id: uuid.UUID, assignment: dict[str, int]) -> dict[int, uuid.UUID]:
-    """HDBSCAN's `-1` (noise, see `cluster.py`) maps to no cluster row at
-    all: it means "not clustered", not "the noise cluster"."""
-    labels = {label for label in assignment.values() if label != -1}
-    return {label: _cluster_uuid(run_id, label) for label in labels}
-
-
-def _cluster_sizes(assignment: dict[str, int]) -> dict[int, int]:
-    sizes: dict[int, int] = {}
-    for label in assignment.values():
-        if label != -1:
-            sizes[label] = sizes.get(label, 0) + 1
-    return sizes
-
-
-def write_cluster_assignments(conn_fn: ConnFn, assignment: dict[str, int]) -> None:
-    """Persists `cluster_diagnoses`'s `{diagnosis_id: label}` output (WS-F,
-    HDBSCAN integer labels, `-1` = noise/unclustered).
-
-    Neither the plan nor `cluster_diagnoses`'s contract documents this
-    function, and a real type mismatch had to be resolved to write it:
-    `diagnoses.cluster_id` and `clusters.cluster_id` are both `UUID`
-    (revision 0001, frozen for the parallel phase), but `cluster_diagnoses`
-    returns plain `int` labels with no other metadata. This mints one fresh
-    `run_id` per call and a deterministic `uuid5(run_id, str(label))` per
-    distinct non-noise label, upserts a `clusters` row per label (`size`
-    only - `label`/`description`/`suggested_fix`/`medoid_diagnosis_id` are
-    left NULL, since `cluster_diagnoses` supplies none of that and setting
-    them is `cluster_label.py`'s job, WS-F, not built yet), then points each
-    diagnosis's `cluster_id` at the matching row (or NULL for noise).
-    Flagged as an Integration item to confirm once WS-F lands: this bridges
-    the gap defensibly, but WS-F may want a different `run_id`/label
-    lifecycle than "one new run per call, always"."""
-    if not assignment:
-        return
-    run_id = uuid.uuid4()
-    cluster_ids = _cluster_ids_for(run_id, assignment)
-    sizes = _cluster_sizes(assignment)
-
-    conn = conn_fn()
-    with conn.transaction():
-        with conn.cursor() as cur:
-            cur.executemany(
-                """
-                INSERT INTO clusters (cluster_id, run_id, size)
-                VALUES (%s,%s,%s)
-                ON CONFLICT (cluster_id) DO UPDATE SET size = EXCLUDED.size
-                """,
-                [(cid, run_id, sizes[label]) for label, cid in cluster_ids.items()],
-            )
-            cur.executemany(
-                "UPDATE diagnoses SET cluster_id = %s WHERE diagnosis_id = %s",
-                [
-                    (cluster_ids.get(label), diagnosis_id)
-                    for diagnosis_id, label in assignment.items()
-                ],
-            )
