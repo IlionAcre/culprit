@@ -1,3 +1,4 @@
+from culprit.schemas import SpanKind
 from culprit.synth import SynthRun, successful_run
 
 
@@ -53,3 +54,42 @@ def test_two_successful_runs_do_not_share_the_same_object_lists():
     first.steps[0].summary = "mutated for this test only"
 
     assert second.steps[0].summary != "mutated for this test only"
+
+
+def test_retrieved_documents_appear_in_the_next_prompt():
+    """The RAG-context fix: a real agent trace's post-retrieval LLM step
+    carries what was retrieved. Before this, every LLM call was an
+    independent hand-authored string with no path from a retrieval step to
+    anything downstream (see AI_docs/PHASES.md's WS-C open item and
+    tests/test_contrast.py's `_NO_MECHANISM_KINDS`). Checked across many
+    seeds since the retrieval step's position and doc count both vary."""
+    for seed in range(20):
+        run = successful_run(seed)
+        retriever_idx = next(
+            i for i, s in enumerate(run.steps) if s.kind == SpanKind.RETRIEVER
+        )
+        docs = run.spans[retriever_idx].payload.documents
+        next_payload = run.spans[retriever_idx + 1].payload
+
+        assert run.steps[retriever_idx + 1].kind == SpanKind.LLM
+        next_prompt = next_payload.request_messages[0].content or ""
+        assert all(doc.content_preview in next_prompt for doc in docs)
+
+
+def test_retrieved_context_does_not_replace_the_original_instruction():
+    """The fix folds retrieved content in; it must not clobber the
+    hand-authored instruction the next step still needs (e.g. "Process the
+    refund.") - a real RAG prompt carries both the retrieved context and the
+    actual task instruction."""
+    run = successful_run(seed=2)
+    retriever_idx = next(
+        i for i, s in enumerate(run.steps) if s.kind == SpanKind.RETRIEVER
+    )
+    next_prompt = run.spans[retriever_idx + 1].payload.request_messages[0].content
+
+    assert "Retrieved context:" in next_prompt
+    assert next_prompt.strip().endswith((
+        "Check whether this refund was already issued.",
+        "Verify the order is eligible for a refund.",
+        "Process the refund.",
+    ))

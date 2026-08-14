@@ -23,6 +23,22 @@ needs (`SynthRun`, `_make`, `_llm_payload`, `_tool_payload`, `ACTOR_AGENT`,
 `_trace_from`) to fabricate or rewrite steps and to build its own mutated
 `Trace`.
 
+**RAG context injection (Foundation amendment, post-WS-D handoff).** Every
+`_generate` run now folds the retriever step's documents into the request
+message of the LLM step immediately following it, via
+`_inject_retrieved_context`. Before this, every LLM call was an independent
+hand-authored instruction string that never incorporated
+`RetrievalPayload.documents`, so a retrieval step had no causal path to
+anything downstream: L1's `unused_retrieval` detector could not implement its
+specified "<15% token overlap with the next prompt" test (there was nothing
+in the next prompt to overlap with, clean or faulty alike), and WS-D's
+contrastive layer measured `unused_retrieval` at literally zero recall for
+the same reason (see `AI_docs/PHASES.md`'s WS-C open item and
+`tests/test_contrast.py`'s `_NO_MECHANISM_KINDS`). Deliberately deferred
+until WS-D landed its reference model against the old generator shape, per
+the same file's note, so the reference model would not shift underneath a
+workstream still learning from it.
+
 **Why `successful_run` returns a `SynthRun` bundle, not a bare `Trace`.**
 `Trace` deliberately carries no spans or steps (see `schemas.py`), but every
 real consumer - `run_detectors(trace, steps, spans_by_id)`,
@@ -124,6 +140,51 @@ def _retrieval_payload(query: str, doc_count: int, rng: random.Random) -> Retrie
         for n in range(doc_count)
     ]
     return RetrievalPayload(query=query, documents=docs, top_k=doc_count)
+
+
+def _render_retrieved_context(docs: list[RetrievedDoc]) -> str:
+    """The block folded into the next prompt. Built from `content_preview`,
+    the only document text `RetrievedDoc` carries (see `schemas.py`'s Task 2
+    amendment: length plus a bounded preview, not full text) - a real RAG
+    prompt would use the full chunk, but the preview is what this fixture
+    has, and it is enough for a token-overlap test to have something real to
+    measure against."""
+    excerpts = "\n".join(f"- {d.doc_id}: {d.content_preview}" for d in docs)
+    return f"Retrieved context:\n{excerpts}"
+
+
+def _inject_retrieved_context(spans: list[Span], steps: list[Step]) -> None:
+    """Real RAG: the step after a retrieval carries what was retrieved. Folds
+    the retriever step's documents into the immediately following LLM step's
+    request message, mutating `spans` in place. `_generate`'s retrieval
+    block is always immediately followed by exactly one LLM step (the next
+    shuffled block's call, or `call_process_refund` if retrieval landed
+    last), so one linear scan covers every seed; a step with no LLM
+    successor (there is currently none) is simply left alone rather than
+    raising, so this stays safe if the run shape ever changes.
+
+    Deliberately runs inside `_generate`, before `synth_inject.py` ever sees
+    the run: the 20 injectors in that module mutate a deep copy of an
+    already-healthy run, so `unused_retrieval`/`low_score_retrieval`/
+    `goal_token_drift` correctly rewrite *only* the retrieved documents,
+    leaving the already-baked next prompt untouched - exactly the "documents
+    retrieved don't match what the prompt actually used" shape those faults
+    are meant to represent.
+    """
+    for i in range(len(steps) - 1):
+        if steps[i].kind != SpanKind.RETRIEVER or steps[i + 1].kind != SpanKind.LLM:
+            continue
+        docs = spans[i].payload.documents
+        if not docs:
+            continue
+        next_payload = spans[i + 1].payload
+        if not next_payload.request_messages:
+            continue
+        original = next_payload.request_messages[0]
+        context = _render_retrieved_context(docs)
+        next_payload.request_messages[0] = original.model_copy(
+            update={"content": f"{context}\n\n{original.content or ''}"}
+        )
 
 
 # --- span/step construction (also used by synth_inject.py) -----------------
@@ -242,6 +303,8 @@ def _generate(seed: int) -> tuple[str, list[Span], list[Step]]:
     add(SpanKind.LLM, ACTOR_AGENT, "answer",
         _llm_payload(f"Your refund for {order_id} has been processed.", prompt_tokens=900),
         f"llm:{ACTOR_AGENT}:answer", "Agent reports the refund was processed")
+
+    _inject_retrieved_context(spans, steps)
 
     return trace_id, spans, steps
 
