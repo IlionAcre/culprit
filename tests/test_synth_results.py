@@ -88,9 +88,15 @@ def test_layer_stubs_raise_not_implemented_with_their_owner_named():
         contrast(None, [], neighbor_fn=lambda v, k: [], conn_fn=lambda: None)
 
 
-def test_run_detectors_stub_names_ws_c():
-    with pytest.raises(NotImplementedError, match="WS-C"):
-        run_detectors(None, [], {})
+def test_run_detectors_returns_empty_on_an_empty_trace():
+    """WS-C's stub raised NotImplementedError here during Phase 0; now that
+    WS-C is implemented, this just proves the entrypoint handles the
+    trivial empty-trace case gracefully. Real detector coverage lives in
+    tests/test_run_detectors.py and tests/test_detectors_*.py."""
+    from culprit.synth import successful_run
+
+    trace = successful_run(seed=0).trace
+    assert run_detectors(trace, [], {}) == []
 
 
 def test_adjudicate_stub_names_ws_e():
