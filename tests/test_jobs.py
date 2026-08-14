@@ -55,6 +55,47 @@ def test_diagnose_trace_job_loads_diagnoses_and_persists_with_injected_seams(mon
     assert written == [diagnosis]
 
 
+def test_diagnose_trace_job_passes_model_to_pipeline_diagnose(monkeypatch):
+    """pipeline.diagnose now requires a model string (Foundation amendment,
+    see pipeline.py); the job must resolve one (from CULPRIT_MODEL, falling
+    back to DEFAULT_MODEL) and forward it rather than dropping it."""
+    trace = _trace()
+    diagnosis = make_diagnosis(trace_id=trace.trace_id)
+    seen = {}
+
+    def fake_diagnose(t, **kw):
+        seen.update(kw)
+        return diagnosis
+
+    monkeypatch.setattr("culprit.jobs.diagnose", fake_diagnose)
+    monkeypatch.delenv("CULPRIT_MODEL", raising=False)
+
+    diagnose_trace_job(
+        trace.trace_id,
+        conn_fn=lambda: None,
+        call_fn=lambda model, prompt: ("out", 1.0, 0.0),
+        embed_fn=lambda texts: [[0.0] * 384 for _ in texts],
+        trace_loader=lambda conn_fn, trace_id: trace,
+        diagnosis_writer=lambda conn_fn, d: None,
+    )
+
+    assert seen["model"] == "gemini/gemini-2.5-flash-lite"
+
+    seen.clear()
+    monkeypatch.setenv("CULPRIT_MODEL", "gpt-4o-mini")
+
+    diagnose_trace_job(
+        trace.trace_id,
+        conn_fn=lambda: None,
+        call_fn=lambda model, prompt: ("out", 1.0, 0.0),
+        embed_fn=lambda texts: [[0.0] * 384 for _ in texts],
+        trace_loader=lambda conn_fn, trace_id: trace,
+        diagnosis_writer=lambda conn_fn, d: None,
+    )
+
+    assert seen["model"] == "gpt-4o-mini"
+
+
 def test_diagnose_trace_job_propagates_trace_not_found(monkeypatch):
     """A trace_id with no persisted trace must fail the RQ job loudly, not
     silently return a placeholder result."""

@@ -126,4 +126,5 @@ def test_pipeline_diagnose_stub_names_integration_task():
             conn_fn=lambda: None,
             call_fn=lambda model, prompt: ("", 0.0, 0.0),
             embed_fn=lambda texts: [],
+            model="m",
         )

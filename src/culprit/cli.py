@@ -54,6 +54,7 @@ def main(
     # (or a test's monkeypatch.setenv) is never clobbered.
     os.environ.setdefault("CULPRIT_DATABASE_URL", CONFIG.database_url)
     os.environ.setdefault("CULPRIT_REDIS_URL", CONFIG.redis_url)
+    os.environ.setdefault("CULPRIT_MODEL", CONFIG.model)
 
 
 @app.command()

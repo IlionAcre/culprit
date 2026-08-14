@@ -34,6 +34,12 @@ from culprit.signals import Diagnosis
 logger = logging.getLogger(LOGGER_NAME)
 
 DEFAULT_DATABASE_URL = "postgresql://localhost:5432/culprit"
+# Mirrors CulpritConfig.model's own hardcoded default (config.py). Read from
+# an env var rather than culprit.config directly, same reasoning as
+# _conn_fn_from_env: only cli.py/plugin registries import config, and
+# pipeline.diagnose now requires a model string (see pipeline.py's
+# Foundation-amendment docstring).
+DEFAULT_MODEL = "gemini/gemini-2.5-flash-lite"
 
 TraceLoaderFn = Callable[[ConnFn, str], Trace]
 DiagnosisWriterFn = Callable[[ConnFn, Diagnosis], None]
@@ -137,6 +143,7 @@ def diagnose_trace_job(
     conn_fn: ConnFn | None = None,
     call_fn: CallFn | None = None,
     embed_fn: EmbedFn | None = None,
+    model: str | None = None,
     trace_loader: TraceLoaderFn = _default_trace_loader,
     diagnosis_writer: DiagnosisWriterFn = _default_diagnosis_writer,
 ) -> str:
@@ -144,15 +151,23 @@ def diagnose_trace_job(
     Trace, run pipeline.diagnose (Integration-filled L0-L3 cascade),
     persist the result, and return the new diagnosis_id. Every seam is
     keyword-injectable and defaulted, so this is testable with pipeline
-    monkeypatched and no Postgres, Redis, or litellm dependency."""
+    monkeypatched and no Postgres, Redis, or litellm dependency.
+
+    `model` defaults from CULPRIT_MODEL (set by cli.py's callback from
+    CulpritConfig.model, same pattern as CULPRIT_DATABASE_URL/
+    CULPRIT_REDIS_URL), falling back to DEFAULT_MODEL so a worker started
+    without going through the CLI callback still has a usable default."""
     conn_fn = conn_fn or _conn_fn_from_env()
     call_fn = call_fn or litellm_call
     embed_fn = embed_fn or embed_texts
+    model = model or os.environ.get("CULPRIT_MODEL", DEFAULT_MODEL)
 
     logger.info("diagnose job started", extra={"event": "diagnose_job_started", "trace_id": trace_id})
     try:
         trace = trace_loader(conn_fn, trace_id)
-        diagnosis = diagnose(trace, conn_fn=conn_fn, call_fn=call_fn, embed_fn=embed_fn)
+        diagnosis = diagnose(
+            trace, conn_fn=conn_fn, call_fn=call_fn, embed_fn=embed_fn, model=model
+        )
         diagnosis_writer(conn_fn, diagnosis)
     except Exception:
         # logger.error(..., extra={"traceback": ...}) rather than
