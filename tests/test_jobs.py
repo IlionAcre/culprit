@@ -114,13 +114,26 @@ def test_diagnose_trace_job_propagates_trace_not_found(monkeypatch):
         )
 
 
-def test_diagnose_trace_job_default_trace_loader_raises_persistence_not_wired():
-    """store_traces.py does not exist yet (WS-B). Calling the real default
-    loader (rather than injecting a fake) must fail with a clearly-named
-    error, not an opaque ModuleNotFoundError."""
-    with pytest.raises(PersistenceNotWiredError, match="store_traces"):
+def test_diagnose_trace_job_default_trace_loader_wires_to_store_traces_read_trace(monkeypatch):
+    """store_traces.py now exists (WS-B): the default loader's `_seam()` call
+    must actually resolve `culprit.store_traces.read_trace` and use its
+    result, rather than raising `PersistenceNotWiredError` forever. Proven
+    here by monkeypatching the real function (not the seam) and checking its
+    `(None, [], [])` "no such trace" return is what turns into
+    `TraceNotFoundError` - the same contract `_default_trace_loader`
+    documents. This test is the stale side of the WS-B/WS-G handshake:
+    it asserted absence before WS-B landed, and now asserts wiring instead,
+    the same resolution `tests/test_synth_results.py` already used for the
+    analysis-layer stubs."""
+
+    def fake_read_trace(conn_fn, trace_id):
+        return None, [], []
+
+    monkeypatch.setattr("culprit.store_traces.read_trace", fake_read_trace)
+
+    with pytest.raises(TraceNotFoundError):
         diagnose_trace_job(
-            "trace-1",
+            "missing-trace",
             conn_fn=lambda: None,
             call_fn=lambda model, prompt: ("out", 1.0, 0.0),
             embed_fn=lambda texts: [],
@@ -156,12 +169,32 @@ def test_recluster_job_reads_all_diagnoses_and_clusters_and_writes(monkeypatch):
     assert written == {"d1": 0, "d2": 0}
 
 
-def test_recluster_job_default_reader_raises_persistence_not_wired():
-    """store_diagnoses.py has no documented bulk reader (see jobs.py's
-    module docstring). Exercising the real default without injecting a
-    fake must fail clearly rather than crash with an import error."""
-    with pytest.raises(PersistenceNotWiredError, match="store_diagnoses"):
-        recluster_job(conn_fn=lambda: None, embed_fn=lambda texts: [])
+def test_recluster_job_default_reader_and_writer_wire_to_store_diagnoses(monkeypatch):
+    """store_diagnoses.py now exists (WS-B) with the exact names jobs.py's
+    docstring guessed (`read_all_diagnoses`, `write_cluster_assignments`):
+    both default seams must resolve to the real functions rather than
+    raising `PersistenceNotWiredError` forever. Proven by monkeypatching the
+    real functions (not the seams) and checking the job's return value and
+    the writer's captured call both come from that real wiring path. Stale
+    side of the WS-B/WS-G handshake, same resolution as the sibling
+    trace-loader test above."""
+    diagnoses = [make_diagnosis(diagnosis_id="d1"), make_diagnosis(diagnosis_id="d2")]
+    written = {}
+
+    monkeypatch.setattr("culprit.store_diagnoses.read_all_diagnoses", lambda conn_fn: diagnoses)
+    monkeypatch.setattr(
+        "culprit.store_diagnoses.write_cluster_assignments",
+        lambda conn_fn, assignment: written.update(assignment),
+    )
+    monkeypatch.setattr(
+        "culprit.jobs.cluster_diagnoses",
+        lambda diags, *, embed_fn: {d.diagnosis_id: 0 for d in diags},
+    )
+
+    result = recluster_job(conn_fn=lambda: None, embed_fn=lambda texts: [])
+
+    assert result == {"d1": 0, "d2": 0}
+    assert written == {"d1": 0, "d2": 0}
 
 
 def test_ingest_trace_delegates_to_injected_ingest_fn_and_returns_trace_id():
