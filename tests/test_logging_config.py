@@ -34,6 +34,58 @@ def test_json_formatter_produces_valid_json_with_an_event_key():
     assert "timestamp" in payload
 
 
+def test_json_formatter_captures_exc_info_traceback():
+    """Regression pin: JsonFormatter must read record.exc_info and emit a
+    `traceback` field, or logger.exception(...)/logger.error(...,
+    exc_info=True) silently drops the stack trace (the log line still
+    appears, just with no traceback in it) - see AI_docs/PHASES.md's "TRAP
+    every remaining workstream will hit"."""
+    try:
+        raise ValueError("boom")
+    except ValueError:
+        import sys
+
+        record = _make_record(event="test_event", exc_info=sys.exc_info())
+
+    payload = json.loads(JsonFormatter().format(record))
+
+    assert "traceback" in payload
+    assert "ValueError: boom" in payload["traceback"]
+    assert "Traceback (most recent call last)" in payload["traceback"]
+
+
+def test_json_formatter_omits_traceback_field_when_no_exception():
+    """The new field is additive only: a normal log line (no exc_info) must
+    not gain a spurious `traceback` key."""
+    record = _make_record(event="test_event")
+
+    payload = json.loads(JsonFormatter().format(record))
+
+    assert "traceback" not in payload
+
+
+def test_configure_logging_writes_traceback_for_logger_exception(tmp_path):
+    """End-to-end pin at the level jobs.py actually calls it: inside a real
+    except block, logger.exception(...) must produce a log line whose
+    `traceback` field contains the stack trace, not just the message."""
+    log_file = tmp_path / "culprit.jsonl"
+    configure_logging(log_file, "INFO")
+    logger = logging.getLogger(LOGGER_NAME)
+
+    try:
+        raise RuntimeError("kaboom")
+    except RuntimeError:
+        logger.exception("job failed", extra={"event": "job_failed"})
+    for handler in logger.handlers:
+        handler.flush()
+
+    lines = log_file.read_text().splitlines()
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["event"] == "job_failed"
+    assert "RuntimeError: kaboom" in payload["traceback"]
+
+
 def test_json_formatter_handles_non_json_native_extra_fields():
     """A stray Path (or any non-JSON-native extra field, e.g. a datetime)
     must not crash the log call - default=str is the safety net."""

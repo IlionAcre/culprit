@@ -13,7 +13,18 @@ _STANDARD_LOG_RECORD_ATTRS = frozenset(logging.makeLogRecord({}).__dict__.keys()
 
 class JsonFormatter(logging.Formatter):
     """Structured JSON Lines formatter: one JSON object per log line, with
-    whatever extra fields the call site passed via `extra={...}` merged in."""
+    whatever extra fields the call site passed via `extra={...}` merged in.
+
+    **Foundation amendment (post-Phase-0): captures `record.exc_info`.**
+    Before this, `logger.exception(...)` (and any `logger.error(...,
+    exc_info=True)`) appeared to succeed - the log line was written - but the
+    traceback was silently absent, because this formatter never read
+    `exc_info` at all. Found empirically by WS-G while verifying a security
+    fix actually worked. This is a strict addition (a new `traceback` field
+    only appears when `exc_info` is present) and changes no existing
+    contract. See `AI_docs/PHASES.md`'s "TRAP every remaining workstream will
+    hit" note and `test_logging_config.py` for the pinning test.
+    """
 
     def format(self, record: logging.LogRecord) -> str:
         payload = {
@@ -28,6 +39,8 @@ class JsonFormatter(logging.Formatter):
             if key not in _STANDARD_LOG_RECORD_ATTRS
         }
         payload.update(extra)
+        if record.exc_info:
+            payload["traceback"] = self.formatException(record.exc_info)
         # default=str: extra fields aren't guaranteed JSON-native (e.g. a
         # Path passed as trace_dir) - a log call must never crash a run.
         return json.dumps(payload, default=str)
