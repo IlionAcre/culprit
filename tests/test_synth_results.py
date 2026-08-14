@@ -86,8 +86,11 @@ def test_contrast_is_implemented_and_abstains_cleanly_with_no_references():
     Phase 1 stubs): `contrast()` no longer raises `NotImplementedError`.
     An empty neighbor pool is exactly the "insufficient_references"
     abstention path, not a crash - `trace=None` is safe here only because
-    zero steps short-circuits before `trace` is ever read."""
-    result = contrast(None, [], neighbor_fn=lambda v, k: [], conn_fn=lambda: None)
+    zero steps short-circuits before `trace` is ever read. `spans_by_id`
+    was added to the signature after the WS-D handoff report (the original
+    stub never received spans at all, a defect in the frozen contract, not
+    a limitation to work around); this call reflects that fix."""
+    result = contrast(None, [], {}, neighbor_fn=lambda v, k: [], conn_fn=lambda: None)
 
     assert result.abstained
     assert result.abstain_reason == "empty_trace"
