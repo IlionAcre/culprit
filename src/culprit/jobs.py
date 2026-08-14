@@ -19,6 +19,7 @@ supplies the real callables, not new orchestration.
 
 import logging
 import os
+import traceback
 from collections.abc import Callable
 
 from culprit.cluster import cluster_diagnoses
@@ -154,7 +155,21 @@ def diagnose_trace_job(
         diagnosis = diagnose(trace, conn_fn=conn_fn, call_fn=call_fn, embed_fn=embed_fn)
         diagnosis_writer(conn_fn, diagnosis)
     except Exception:
-        logger.exception("diagnose job failed", extra={"event": "diagnose_job_failed", "trace_id": trace_id})
+        # logger.error(..., extra={"traceback": ...}) rather than
+        # logger.exception(...): this project's JsonFormatter
+        # (logging_config.py, frozen) never reads record.exc_info, so
+        # logger.exception's traceback is silently dropped by it - the
+        # only way the full detail actually lands in the log file is as
+        # an explicit extra field. RQ's own exc_string (see queue.py) is
+        # the fallback if a job dies before reaching this except block.
+        logger.error(
+            "diagnose job failed",
+            extra={
+                "event": "diagnose_job_failed",
+                "trace_id": trace_id,
+                "traceback": traceback.format_exc(),
+            },
+        )
         raise
     logger.info(
         "diagnose job completed",
@@ -183,7 +198,12 @@ def recluster_job(
         assignment = cluster_diagnoses(diagnoses, embed_fn=embed_fn)
         cluster_writer(conn_fn, assignment)
     except Exception:
-        logger.exception("recluster job failed", extra={"event": "recluster_job_failed"})
+        # See diagnose_trace_job's except block for why this is
+        # logger.error(traceback=...) rather than logger.exception(...).
+        logger.error(
+            "recluster job failed",
+            extra={"event": "recluster_job_failed", "traceback": traceback.format_exc()},
+        )
         raise
     logger.info(
         "recluster job completed",
