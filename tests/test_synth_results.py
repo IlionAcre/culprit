@@ -107,9 +107,17 @@ def test_run_detectors_returns_empty_on_an_empty_trace():
     assert run_detectors(trace, [], {}) == []
 
 
-def test_adjudicate_stub_names_ws_e():
-    with pytest.raises(NotImplementedError, match="WS-E"):
-        adjudicate([], None, [], call_fn=lambda model, prompt: ("", 0.0, 0.0), model="m")
+def test_adjudicate_is_implemented_and_returns_nothing_for_no_candidates():
+    """WS-E landed (unlike cluster_diagnoses below, still a Phase 1 stub):
+    adjudicate() no longer raises NotImplementedError. trace=None is safe
+    here only because zero candidates short-circuits before trace is ever
+    read, mirroring the same precedent test_contrast_is_implemented... set
+    above. Real coverage lives in tests/test_adjudicate.py,
+    test_candidates.py, test_context_window.py, test_prompts.py, and
+    test_confidence.py."""
+    result = adjudicate([], None, [], call_fn=lambda model, prompt: ("", 0.0, 0.0), model="m")
+
+    assert result == []
 
 
 def test_cluster_diagnoses_stub_names_ws_f():
