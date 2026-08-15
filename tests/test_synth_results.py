@@ -1,5 +1,3 @@
-import pytest
-
 from culprit.adjudicate import adjudicate
 from culprit.cluster import cluster_diagnoses
 from culprit.contrast import contrast
@@ -129,14 +127,30 @@ def test_cluster_diagnoses_is_implemented_and_returns_empty_dict_for_no_diagnose
     assert result == {}
 
 
-def test_pipeline_diagnose_stub_names_integration_task():
-    """pipeline.py is Integration-owned, not a WS stub, so its message names
-    the integration task rather than a workstream letter."""
-    with pytest.raises(NotImplementedError, match="Integration"):
-        diagnose(
-            None,
-            conn_fn=lambda: None,
-            call_fn=lambda model, prompt: ("", 0.0, 0.0),
-            embed_fn=lambda texts: [],
-            model="m",
-        )
+def test_pipeline_diagnose_is_implemented_and_returns_a_diagnosis(monkeypatch):
+    """pipeline.py's NotImplementedError named Integration task I1, not a
+    workstream letter, because Integration (not a parallel workstream) owns
+    filling it in. I1 landed: diagnose() no longer raises, matching the
+    precedent every other layer's stub-retirement test in this file sets.
+    Full wiring/isolation coverage lives in tests/test_pipeline.py; this
+    only proves the entrypoint is real and callable again."""
+    from culprit.schemas import Outcome, Trace
+    from culprit.signals import ContrastResult, Diagnosis
+
+    trace = Trace(trace_id="t1", source="synth", outcome=Outcome.FAILURE, span_count=0, step_count=0)
+    monkeypatch.setattr("culprit.pipeline.read_trace", lambda conn_fn, trace_id: (trace, [], []))
+    monkeypatch.setattr(
+        "culprit.pipeline.contrast",
+        lambda *a, **kw: ContrastResult(candidates=[], reference_count=0, abstained=True, abstain_reason="empty_trace"),
+    )
+
+    result = diagnose(
+        trace,
+        conn_fn=lambda: None,
+        call_fn=lambda model, prompt: ("{}", 0.0, 0.0),
+        embed_fn=lambda texts: [[0.0] * 384 for _ in texts],
+        model="m",
+    )
+
+    assert isinstance(result, Diagnosis)
+    assert result.trace_id == "t1"
