@@ -2,28 +2,23 @@
 one-line-per-step spine, a zoom window around the candidate step, and
 terminal-outcome evidence, hard-capped at `token_budget` tokens.
 
-**Known contract gap, worked around here rather than by editing a frozen
-file** (see the workstream report): `adjudicate.py`'s signature -
-`adjudicate(candidates, trace, steps, *, call_fn, model)` - is already
-committed to by the frozen `pipeline.py` and by `tests/test_synth_results.py`,
-neither editable here. It passes `Trace` and `list[Step]` only, never
-`Span`/`spans_by_id`, and `Step.summary` (schemas.py) is a short templated
-sentence ("search_orders returns ok"), not raw payload text - so the plan's
-"zoom window: full payloads, truncated head-and-tail" cannot be built from
-raw span content at all. What fills the gap instead: `Candidate.signals`
-already carries each L1 detector's own `Evidence.excerpt` (real, up to
-400-char, head-and-tail-truncated payload snippets), and `Candidate.divergence`
-carries L2's `observed_signature`/`expected_signatures` - but both are
-attached only to the candidate's own step, not its i-2..i+2 neighbors, which
-still only get `Step.summary`. Recommend a Foundation amendment adding
-`spans_by_id` to `adjudicate()`, mirroring the one already applied to
-`contrast()` after WS-D's handoff report, if full-payload neighbor evidence
-is wanted.
+**Integration fix (AI_docs/INTEGRATION_ITEMS.md item 2), resolved.** WS-E
+shipped this module unable to see `Span`/`spans_by_id` - `adjudicate()`
+passed only `Trace` and `list[Step]`, and `Step.summary` is a short
+templated sentence, not raw payload text, so the zoom window's i-2..i+2
+neighbors got no real content beyond the candidate's own step (which still
+had `Candidate.signals[].evidence[].excerpt` and `Candidate.divergence` to
+draw on). `adjudicate()` and `build_context_packet()` both gained an
+optional `spans_by_id` keyword (default `None`, so every WS-E test keeps
+passing unchanged); when supplied, `_zoom_block` renders each neighbor
+step's real payload text (`_payload_text`), truncated head-and-tail same as
+everything else in this module. Mirrors the fix WS-D already applied to
+`contrast()`.
 """
 
 from dataclasses import dataclass
 
-from culprit.schemas import Step, Trace
+from culprit.schemas import AgentPayload, LlmPayload, RetrievalPayload, Span, Step, ToolPayload, Trace
 from culprit.signals import Candidate
 
 _DEFAULT_TOKEN_BUDGET = 12_000
@@ -118,13 +113,37 @@ def _render_spine(steps: list[Step], budget_tokens: int) -> tuple[str, frozenset
     return "\n".join(head_lines + [marker] + tail_lines), visible
 
 
-def _zoom_block(step: Step, candidate: Candidate) -> str:
+def _payload_text(span: "Span | None") -> str:
+    """Raw payload text for one span, used to fill the zoom window's
+    neighbor steps with real content instead of only `Step.summary`'s short
+    templated sentence (see this module's docstring: `adjudicate()` gained
+    an optional `spans_by_id` during Integration, the same fix WS-D applied
+    to `contrast()`, so this is the corresponding render-side change)."""
+    if span is None or span.payload is None:
+        return ""
+    payload = span.payload
+    if isinstance(payload, ToolPayload):
+        return payload.error_message or payload.result_text
+    if isinstance(payload, LlmPayload):
+        messages = payload.response_messages or payload.request_messages
+        return "\n".join(m.content for m in messages if m.content)
+    if isinstance(payload, RetrievalPayload):
+        return "\n".join(d.content_preview for d in payload.documents)
+    if isinstance(payload, AgentPayload):
+        return payload.output_text or payload.input_text
+    return ""
+
+
+def _zoom_block(step: Step, candidate: Candidate, span: "Span | None" = None) -> str:
     lines = [
         f"--- step {step.step_index} ({step.kind.value}, actor={step.actor}, "
         f"{step.duration_ms:.0f}ms) ---",
         f"signature: {step.signature}",
         f"summary: {_truncate(step.summary, 400)}",
     ]
+    payload_text = _payload_text(span)
+    if payload_text:
+        lines.append(f"payload: {_truncate(payload_text, 400)}")
     if step.step_index == candidate.step_index:
         lines.append(f"flagged by: {candidate.source} (prior={candidate.prior:.2f})")
         for sig in candidate.signals:
@@ -144,12 +163,15 @@ def _zoom_block(step: Step, candidate: Candidate) -> str:
     return "\n".join(lines)
 
 
-def _render_zoom(candidate: Candidate, steps: list[Step], radius: int) -> tuple[str, frozenset[int]]:
+def _render_zoom(
+    candidate: Candidate, steps: list[Step], radius: int, spans_by_id: "dict[str, Span] | None" = None,
+) -> tuple[str, frozenset[int]]:
     lo, hi = candidate.step_index - radius, candidate.step_index + radius
     in_window = sorted((s for s in steps if lo <= s.step_index <= hi), key=lambda s: s.step_index)
     if not in_window:
         return "(no steps in zoom window)", frozenset()
-    text = "\n\n".join(_zoom_block(s, candidate) for s in in_window)
+    spans_by_id = spans_by_id or {}
+    text = "\n\n".join(_zoom_block(s, candidate, spans_by_id.get(s.span_id)) for s in in_window)
     return text, frozenset(s.step_index for s in in_window)
 
 
@@ -179,6 +201,7 @@ def build_context_packet(
     token_budget: int = _DEFAULT_TOKEN_BUDGET,
     zoom_radius: int = _DEFAULT_ZOOM_RADIUS,
     goal_char_limit: int = _DEFAULT_GOAL_CHAR_LIMIT,
+    spans_by_id: "dict[str, Span] | None" = None,
 ) -> ContextPacket:
     """Assemble the four-section packet for one candidate. Terminal and zoom
     are built first and treated as fixed cost; the spine gets whatever
@@ -192,7 +215,7 @@ def build_context_packet(
         (trace.task_goal if trace is not None else None) or "(no task goal recorded)",
         goal_char_limit,
     )
-    zoom_text, zoom_visible = _render_zoom(candidate, steps, zoom_radius)
+    zoom_text, zoom_visible = _render_zoom(candidate, steps, zoom_radius, spans_by_id)
     terminal_text, terminal_visible = _render_terminal(trace, steps)
 
     fixed_tokens = _total_tokens(task_goal, zoom_text, terminal_text, "")

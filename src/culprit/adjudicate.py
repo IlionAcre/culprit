@@ -28,7 +28,7 @@ from culprit.confidence import agrees_with_l1, calibrate_confidence, cite_check
 from culprit.context_window import ContextPacket, build_context_packet
 from culprit.llm import CallFn
 from culprit.prompts import build_prompt
-from culprit.schemas import Step, Trace
+from culprit.schemas import Span, Step, Trace
 from culprit.signals import Adjudication, Candidate
 from culprit.taxonomy import FailureClass
 
@@ -129,7 +129,7 @@ def _adjudication_from_verdict(
 
 def _process_candidate(
     candidate: Candidate, trace: Trace, steps: list[Step], *, call_fn: CallFn,
-    model: str, token_budget: int,
+    model: str, token_budget: int, spans_by_id: "dict[str, Span] | None" = None,
 ) -> Adjudication:
     """Never raises - both the call and the parse happen inside one broad
     `try`, matching Litmus's `_process_case`. A candidate is independent of
@@ -137,7 +137,9 @@ def _process_candidate(
     what makes fanning this out across a `ThreadPoolExecutor` safe with no
     extra exception plumbing at the call site."""
     try:
-        packet = build_context_packet(candidate, trace, steps, token_budget=token_budget)
+        packet = build_context_packet(
+            candidate, trace, steps, token_budget=token_budget, spans_by_id=spans_by_id,
+        )
         prompt = build_prompt(candidate, packet)
         raw_output, _latency_ms, cost_usd = call_fn(model, prompt)
         verdict = _parse_verdict(raw_output)
@@ -155,6 +157,7 @@ def adjudicate(
     model: str,
     max_workers: int = _DEFAULT_MAX_WORKERS,
     token_budget: int = _DEFAULT_TOKEN_BUDGET,
+    spans_by_id: "dict[str, Span] | None" = None,
 ) -> list[Adjudication]:
     """Build a bounded context packet per candidate and fan out one call per
     candidate. *Rejected: one call covering all candidates* - reintroduces
@@ -163,13 +166,20 @@ def adjudicate(
     meaningful (CLAUDE.md's "L3 adjudication" section). `max_workers<=1`
     runs sequentially, identical to Litmus's own concurrency-toggle
     convention, useful for tests that want deterministic ordering without
-    thread-pool nondeterminism in play."""
+    thread-pool nondeterminism in play.
+
+    `spans_by_id` is optional (default `None`) so every pre-Integration
+    caller and test keeps working unchanged; `pipeline.py` passes the real
+    dict so the zoom window's neighbor steps get real payload text instead
+    of only `Step.summary` (INTEGRATION_ITEMS.md item 2, same fix already
+    applied to `contrast()`)."""
     if not candidates:
         return []
 
     def _run(candidate: Candidate) -> Adjudication:
         return _process_candidate(
-            candidate, trace, steps, call_fn=call_fn, model=model, token_budget=token_budget,
+            candidate, trace, steps, call_fn=call_fn, model=model,
+            token_budget=token_budget, spans_by_id=spans_by_id,
         )
 
     if max_workers <= 1:
