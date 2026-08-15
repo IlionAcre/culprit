@@ -113,7 +113,7 @@ def test_adjudicate_is_implemented_and_returns_nothing_for_no_candidates():
     above. Real coverage lives in tests/test_adjudicate.py,
     test_candidates.py, test_context_window.py, test_prompts.py, and
     test_confidence.py."""
-    result = adjudicate([], None, [], call_fn=lambda model, prompt: ("", 0.0, 0.0), model="m")
+    result = adjudicate([], None, [], call_fn=lambda model, prompt: ("", 0.0, 0.0, 0, 0), model="m")
 
     assert result == []
 
@@ -147,7 +147,7 @@ def test_pipeline_diagnose_is_implemented_and_returns_a_diagnosis(monkeypatch):
     result = diagnose(
         trace,
         conn_fn=lambda: None,
-        call_fn=lambda model, prompt: ("{}", 0.0, 0.0),
+        call_fn=lambda model, prompt: ("{}", 0.0, 0.0, 10, 5),
         embed_fn=lambda texts: [[0.0] * 384 for _ in texts],
         model="m",
     )

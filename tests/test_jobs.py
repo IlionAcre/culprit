@@ -47,7 +47,7 @@ def test_diagnose_trace_job_loads_diagnoses_and_persists_with_injected_seams(mon
     result = diagnose_trace_job(
         trace.trace_id,
         conn_fn=lambda: None,
-        call_fn=lambda model, prompt: ("out", 1.0, 0.0),
+        call_fn=lambda model, prompt: ("out", 1.0, 0.0, 10, 5),
         embed_fn=lambda texts: [[0.0] * 384 for _ in texts],
         trace_loader=fake_trace_loader,
         diagnosis_writer=fake_diagnosis_writer,
@@ -75,7 +75,7 @@ def test_diagnose_trace_job_passes_model_to_pipeline_diagnose(monkeypatch):
     diagnose_trace_job(
         trace.trace_id,
         conn_fn=lambda: None,
-        call_fn=lambda model, prompt: ("out", 1.0, 0.0),
+        call_fn=lambda model, prompt: ("out", 1.0, 0.0, 10, 5),
         embed_fn=lambda texts: [[0.0] * 384 for _ in texts],
         trace_loader=lambda conn_fn, trace_id: trace,
         diagnosis_writer=lambda conn_fn, d: None,
@@ -89,7 +89,7 @@ def test_diagnose_trace_job_passes_model_to_pipeline_diagnose(monkeypatch):
     diagnose_trace_job(
         trace.trace_id,
         conn_fn=lambda: None,
-        call_fn=lambda model, prompt: ("out", 1.0, 0.0),
+        call_fn=lambda model, prompt: ("out", 1.0, 0.0, 10, 5),
         embed_fn=lambda texts: [[0.0] * 384 for _ in texts],
         trace_loader=lambda conn_fn, trace_id: trace,
         diagnosis_writer=lambda conn_fn, d: None,
@@ -109,7 +109,7 @@ def test_diagnose_trace_job_propagates_trace_not_found(monkeypatch):
         diagnose_trace_job(
             "missing-trace",
             conn_fn=lambda: None,
-            call_fn=lambda model, prompt: ("out", 1.0, 0.0),
+            call_fn=lambda model, prompt: ("out", 1.0, 0.0, 10, 5),
             embed_fn=lambda texts: [],
             trace_loader=raising_loader,
             diagnosis_writer=lambda conn_fn, d: None,
@@ -137,7 +137,7 @@ def test_diagnose_trace_job_default_trace_loader_wires_to_store_traces_read_trac
         diagnose_trace_job(
             "missing-trace",
             conn_fn=lambda: None,
-            call_fn=lambda model, prompt: ("out", 1.0, 0.0),
+            call_fn=lambda model, prompt: ("out", 1.0, 0.0, 10, 5),
             embed_fn=lambda texts: [],
         )
 

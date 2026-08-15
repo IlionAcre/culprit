@@ -18,7 +18,7 @@ from culprit.taxonomy import FailureClass
 
 
 def _fake_call_fn(model, prompt):
-    return ("{}", 0.0, 0.0)
+    return ("{}", 0.0, 0.0, 10, 5)
 
 
 def _fake_embed_fn(texts):
@@ -187,7 +187,7 @@ def _verdict_call_fn(step_index: int):
             "counterfactual": "a successful run would have retried or surfaced the empty result",
             "cited_step_indices": [step_index],
         })
-        return raw, 1.0, 0.001
+        return raw, 1.0, 0.001, 15, 6
     return _call
 
 
