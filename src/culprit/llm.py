@@ -14,11 +14,16 @@ from typing import Callable
 
 import litellm
 
-CallFn = Callable[[str, str], tuple[str, float, float]]
-# (model, prompt) -> (raw_output, latency_ms, cost_usd)
+CallFn = Callable[[str, str], tuple[str, float, float, int | None, int | None]]
+# (model, prompt) -> (raw_output, latency_ms, cost_usd, prompt_tokens, completion_tokens)
 
 
-def litellm_call(model: str, prompt: str) -> tuple[str, float, float]:
+def _int_or_none(value) -> int | None:
+    """Usage objects may omit token fields or be mocked; coerce only real ints."""
+    return value if isinstance(value, int) else None
+
+
+def litellm_call(model: str, prompt: str) -> tuple[str, float, float, int | None, int | None]:
     start = time.perf_counter()
     response = litellm.completion(
         model=model, messages=[{"role": "user", "content": prompt}]
@@ -26,4 +31,7 @@ def litellm_call(model: str, prompt: str) -> tuple[str, float, float]:
     latency_ms = (time.perf_counter() - start) * 1000
     output = response.choices[0].message.content
     cost_usd = litellm.completion_cost(completion_response=response)
-    return output, latency_ms, cost_usd
+    usage = getattr(response, "usage", None)
+    prompt_tokens = _int_or_none(getattr(usage, "prompt_tokens", None)) if usage else None
+    completion_tokens = _int_or_none(getattr(usage, "completion_tokens", None)) if usage else None
+    return output, latency_ms, cost_usd, prompt_tokens, completion_tokens
