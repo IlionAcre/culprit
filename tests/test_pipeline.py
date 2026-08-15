@@ -8,10 +8,13 @@ below it to a clean result so a given test only exercises the layer it
 names, matching the isolation the production code itself provides.
 """
 
+import json
+
 from culprit.pipeline import diagnose
 from culprit.signals import ContrastResult, Diagnosis, DivergenceCandidate
 from culprit.synth import successful_run
 from culprit.synth_inject import inject
+from culprit.taxonomy import FailureClass
 
 
 def _fake_call_fn(model, prompt):
@@ -172,6 +175,65 @@ def test_diagnose_degrades_l2_instead_of_crashing_when_contrast_raises(monkeypat
 
     assert diagnosis.degraded_layers == ["l2"]
     assert diagnosis.divergences == []
+
+
+def _verdict_call_fn(step_index: int):
+    def _call(model, prompt):
+        raw = json.dumps({
+            "is_root_cause": True,
+            "failure_class": FailureClass.SILENT_EMPTY_RESULT_MISREAD.value,
+            "confidence": 0.95,
+            "rationale": f"step {step_index} returned an empty result the agent treated as success",
+            "counterfactual": "a successful run would have retried or surfaced the empty result",
+            "cited_step_indices": [step_index],
+        })
+        return raw, 1.0, 0.001
+    return _call
+
+
+def test_diagnose_wires_l3_and_surfaces_a_committed_root_cause(monkeypatch):
+    """End-to-end proof that L1's signal, L2's clean-empty result, and L3's
+    adjudication are really chained through merge_candidates -> adjudicate
+    -> select_diagnosis, landing a real, non-abstained root cause."""
+    base = successful_run(seed=8)
+    run, step_index = inject(base, "empty_tool_result", at_step=1)
+
+    monkeypatch.setattr(
+        "culprit.pipeline.read_trace", lambda conn_fn, trace_id: (run.trace, run.spans, run.steps)
+    )
+    monkeypatch.setattr("culprit.pipeline.contrast", _clean_contrast)
+
+    diagnosis = diagnose(
+        run.trace, conn_fn=lambda: None, call_fn=_verdict_call_fn(step_index), embed_fn=_fake_embed_fn, model="m",
+    )
+
+    assert diagnosis.degraded_layers == []
+    assert diagnosis.abstained is False
+    assert diagnosis.root_cause_step_index == step_index
+    assert diagnosis.failure_class == FailureClass.SILENT_EMPTY_RESULT_MISREAD.value
+    assert diagnosis.candidates_considered >= 1
+    assert len(diagnosis.adjudications) >= 1
+
+
+def test_diagnose_degrades_l3_instead_of_crashing_when_merge_candidates_raises(monkeypatch):
+    base = successful_run(seed=9)
+    monkeypatch.setattr(
+        "culprit.pipeline.read_trace", lambda conn_fn, trace_id: (base.trace, base.spans, base.steps)
+    )
+    monkeypatch.setattr("culprit.pipeline.contrast", _clean_contrast)
+
+    def _boom(*a, **kw):
+        raise ValueError("candidate merge exploded")
+
+    monkeypatch.setattr("culprit.pipeline.merge_candidates", _boom)
+
+    diagnosis = diagnose(
+        base.trace, conn_fn=lambda: None, call_fn=_fake_call_fn, embed_fn=_fake_embed_fn, model="m",
+    )
+
+    assert diagnosis.degraded_layers == ["l3"]
+    assert diagnosis.adjudications == []
+    assert diagnosis.abstained is True
 
 
 def test_diagnose_records_layer_versions_and_abstains_with_no_adjudications_yet(monkeypatch):

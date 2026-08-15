@@ -32,6 +32,8 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
+from culprit.adjudicate import adjudicate
+from culprit.candidates import merge_candidates
 from culprit.confidence import select_diagnosis
 from culprit.contrast import contrast
 from culprit.db import ConnFn
@@ -40,7 +42,7 @@ from culprit.llm import CallFn
 from culprit.logging_config import LOGGER_NAME
 from culprit.run_detectors import run_detectors
 from culprit.schemas import Trace
-from culprit.signals import Diagnosis, DivergenceCandidate, Signal
+from culprit.signals import Adjudication, Diagnosis, DivergenceCandidate, Signal
 from culprit.store_traces import read_trace
 from culprit.store_traces_query import nearest_successful
 
@@ -76,9 +78,11 @@ def diagnose(
 
     Every layer below is wrapped in its own `try/except`: a raise in one
     layer never stops the layers after it from running, it only costs that
-    layer's contribution and adds its name to `degraded_layers`. L0, L1, and
-    L2 are wired as of this revision; L3 (and the candidate merge that feeds
-    it) lands in a following revision, wired here as an empty result.
+    layer's contribution and adds its name to `degraded_layers`. If L2 dies
+    (or abstains) the candidate merge still runs on L1 alone, so L3 still
+    adjudicates something and the diagnosis still comes back, just with
+    `degraded_layers` naming what was lost - never a quietly weaker answer
+    presented as a complete one.
     """
     degraded_layers: list[str] = []
 
@@ -121,9 +125,22 @@ def diagnose(
         )
         degraded_layers.append("l2")
 
-    # L3 lands in a following revision; wired here as an empty result so
-    # this slice is a complete, correct function on its own.
-    adjudications: list = []
+    candidates: list = []
+    adjudications: list[Adjudication] = []
+    try:
+        candidates = merge_candidates(signals, divergences, trace, steps)
+        # spans_by_id lets the zoom window show real payload text for a
+        # candidate's neighbor steps, not only Step.summary's short
+        # templated sentence (INTEGRATION_ITEMS.md item 2, fixed alongside
+        # this wiring).
+        adjudications = adjudicate(
+            candidates, trace, steps, call_fn=call_fn, model=model, spans_by_id=spans_by_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - layer isolation is the point
+        logger.warning(
+            "L3 adjudication failed", extra={"event": "pipeline_l3_failed", "trace_id": trace.trace_id, "error": str(exc)},
+        )
+        degraded_layers.append("l3")
 
     verdict = select_diagnosis(adjudications)
 
@@ -140,7 +157,7 @@ def diagnose(
         abstain_reason=verdict.abstain_reason,
         rationale=verdict.winner.rationale if verdict.winner else "",
         counterfactual=verdict.winner.counterfactual if verdict.winner else "",
-        candidates_considered=0,
+        candidates_considered=len(candidates),
         signals=signals,
         divergences=divergences,
         adjudications=adjudications,
