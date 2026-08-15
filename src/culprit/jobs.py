@@ -44,7 +44,11 @@ TraceLoaderFn = Callable[[ConnFn, str], Trace]
 DiagnosisWriterFn = Callable[[ConnFn, Diagnosis], None]
 DiagnosesReaderFn = Callable[[ConnFn, str], list[Diagnosis]]
 AllDiagnosesReaderFn = Callable[[ConnFn], list[Diagnosis]]
-ClusterWriterFn = Callable[[ConnFn, dict], None]
+# Returns `label -> cluster_id`, not None (INTEGRATION_ITEMS.md item 1): the
+# stable identity store_clusters.resolve_cluster_identity resolved this pass,
+# which cluster_labeler below needs to read/write the right `clusters` rows.
+ClusterWriterFn = Callable[[ConnFn, dict], dict]
+ClusterLabelerFn = Callable[..., list]
 IngestFn = Callable[[bytes, str, ConnFn], str]
 
 
@@ -114,14 +118,37 @@ def _default_all_diagnoses_reader(conn_fn: ConnFn) -> list[Diagnosis]:
     return _seam("store_diagnoses", "read_all_diagnoses", note)(conn_fn)
 
 
-def _default_cluster_writer(conn_fn: ConnFn, assignment: dict) -> None:
+def _default_cluster_writer(conn_fn: ConnFn, assignment: dict) -> dict:
     """INTEGRATION_ITEMS.md item 4: the real function lives in
     store_clusters.py (split out of store_diagnoses.py once that module hit
     the line ceiling), not store_diagnoses.py. This seam now points there
     directly; store_diagnoses.write_cluster_assignments was a temporary
-    re-export kept only so this seam name kept resolving, now deleted."""
+    re-export kept only so this seam name kept resolving, now deleted.
+
+    Returns the `label -> cluster_id` map (item 1's fix: identity is now
+    resolved, not re-minted every pass), which `recluster_job` forwards to
+    the cluster labeler."""
     note = "(not part of WS-B's original contract; inject cluster_writer)"
-    _seam("store_clusters", "write_cluster_assignments", note)(conn_fn, assignment)
+    return _seam("store_clusters", "write_cluster_assignments", note)(conn_fn, assignment)
+
+
+def _default_cluster_labeler(
+    conn_fn: ConnFn,
+    diagnoses: list[Diagnosis],
+    assignment: dict,
+    cluster_ids: dict,
+    *,
+    embed_fn: EmbedFn,
+    model: str,
+) -> list:
+    """INTEGRATION_ITEMS.md item 3: nothing wrote `clusters.label`/
+    `description`/`suggested_fix`/`medoid_diagnosis_id`/`labeled_size`
+    anywhere in the codebase before this. Wired here, not part of any
+    workstream's original contract."""
+    note = "(item 3: cluster label persistence; inject cluster_labeler)"
+    return _seam("store_cluster_labels", "label_and_persist_clusters", note)(
+        conn_fn, diagnoses, assignment, cluster_ids, embed_fn=embed_fn, model=model
+    )
 
 
 def _default_ingest(payload: bytes, content_type: str, conn_fn: ConnFn) -> str:
@@ -191,21 +218,33 @@ def recluster_job(
     *,
     conn_fn: ConnFn | None = None,
     embed_fn: EmbedFn | None = None,
+    model: str | None = None,
     diagnosis_reader: AllDiagnosesReaderFn = _default_all_diagnoses_reader,
     cluster_writer: ClusterWriterFn = _default_cluster_writer,
+    cluster_labeler: ClusterLabelerFn = _default_cluster_labeler,
 ) -> dict:
     """RQ entrypoint for the scheduled batch reclustering pass (L5).
     Deliberately not on the per-trace path: clustering needs an
     accumulated corpus of diagnoses to be meaningful, so this runs on a
-    schedule or on demand, never as a side effect of one diagnosis."""
+    schedule or on demand, never as a side effect of one diagnosis.
+
+    Labeling (INTEGRATION_ITEMS.md item 3) now runs as the last step of this
+    same job rather than nowhere: `cluster_writer` resolves stable
+    `cluster_id`s (item 1), and `cluster_labeler` reads each cluster's prior
+    state through that same stable identity so `needs_relabel`'s skip has
+    something real to compare against on the next pass."""
     conn_fn = conn_fn or _conn_fn_from_env()
     embed_fn = embed_fn or embed_texts
+    model = model or os.environ.get("CULPRIT_MODEL", DEFAULT_MODEL)
 
     logger.info("recluster job started", extra={"event": "recluster_job_started"})
     try:
         diagnoses = diagnosis_reader(conn_fn)
         assignment = cluster_diagnoses(diagnoses, embed_fn=embed_fn)
-        cluster_writer(conn_fn, assignment)
+        cluster_ids = cluster_writer(conn_fn, assignment)
+        labels = cluster_labeler(
+            conn_fn, diagnoses, assignment, cluster_ids, embed_fn=embed_fn, model=model
+        )
     except Exception:
         # See diagnose_trace_job's except block: logger.exception now works
         # (JsonFormatter reads record.exc_info), no manual traceback needed.
@@ -220,6 +259,7 @@ def recluster_job(
             "event": "recluster_job_completed",
             "diagnosis_count": len(diagnoses),
             "cluster_count": len(set(assignment.values())),
+            "labeled_count": len(labels),
         },
     )
     return assignment

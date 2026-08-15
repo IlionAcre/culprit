@@ -144,16 +144,23 @@ def test_diagnose_trace_job_default_trace_loader_wires_to_store_traces_read_trac
 
 def test_recluster_job_reads_all_diagnoses_and_clusters_and_writes(monkeypatch):
     """The batch reclustering pass must read every diagnosis (not scoped to
-    one trace), call cluster.cluster_diagnoses, and persist the assignment
-    via the injected writer."""
+    one trace), call cluster.cluster_diagnoses, persist the assignment via
+    the injected writer, and hand the writer's resolved `label -> cluster_id`
+    map on to the injected labeler (item 1/item 3 wiring)."""
     diagnoses = [make_diagnosis(diagnosis_id="d1"), make_diagnosis(diagnosis_id="d2")]
     written = {}
+    labeler_calls = []
 
     def fake_reader(conn_fn):
         return diagnoses
 
     def fake_writer(conn_fn, assignment):
         written.update(assignment)
+        return {0: "cluster-uuid-0"}
+
+    def fake_labeler(conn_fn, diags, assignment, cluster_ids, *, embed_fn, model):
+        labeler_calls.append((diags, assignment, cluster_ids))
+        return []
 
     monkeypatch.setattr(
         "culprit.jobs.cluster_diagnoses",
@@ -165,29 +172,42 @@ def test_recluster_job_reads_all_diagnoses_and_clusters_and_writes(monkeypatch):
         embed_fn=lambda texts: [[0.0] * 384 for _ in texts],
         diagnosis_reader=fake_reader,
         cluster_writer=fake_writer,
+        cluster_labeler=fake_labeler,
     )
 
     assert result == {"d1": 0, "d2": 0}
     assert written == {"d1": 0, "d2": 0}
+    assert len(labeler_calls) == 1
+    assert labeler_calls[0][2] == {0: "cluster-uuid-0"}
 
 
-def test_recluster_job_default_reader_and_writer_wire_to_store_diagnoses(monkeypatch):
+def test_recluster_job_default_reader_writer_and_labeler_wire_to_store_modules(monkeypatch):
     """store_diagnoses.py now exists (WS-B) with the exact reader name
     jobs.py's docstring guessed (`read_all_diagnoses`); the writer,
     `write_cluster_assignments`, lives in the sibling `store_clusters.py`
     (INTEGRATION_ITEMS.md item 4 - jobs.py's seam was repointed there
-    directly once the temporary store_diagnoses re-export was deleted).
-    Both default seams must resolve to the real functions rather than
-    raising `PersistenceNotWiredError` forever. Proven by monkeypatching the
-    real functions (not the seams) and checking the job's return value and
-    the writer's captured call both come from that real wiring path."""
+    directly once the temporary store_diagnoses re-export was deleted), and
+    the labeler, `label_and_persist_clusters`, lives in the new
+    `store_cluster_labels.py` (item 3). All three default seams must resolve
+    to the real functions rather than raising `PersistenceNotWiredError`
+    forever. Proven by monkeypatching the real functions (not the seams) and
+    checking the job's return value and each captured call come from that
+    real wiring path."""
     diagnoses = [make_diagnosis(diagnosis_id="d1"), make_diagnosis(diagnosis_id="d2")]
     written = {}
+    labeled = {}
 
     monkeypatch.setattr("culprit.store_diagnoses.read_all_diagnoses", lambda conn_fn: diagnoses)
     monkeypatch.setattr(
         "culprit.store_clusters.write_cluster_assignments",
-        lambda conn_fn, assignment: written.update(assignment),
+        lambda conn_fn, assignment: written.update(assignment) or {0: "cluster-uuid-0"},
+    )
+    monkeypatch.setattr(
+        "culprit.store_cluster_labels.label_and_persist_clusters",
+        lambda conn_fn, diags, assignment, cluster_ids, *, embed_fn, model: labeled.update(
+            cluster_ids=cluster_ids
+        )
+        or [],
     )
     monkeypatch.setattr(
         "culprit.jobs.cluster_diagnoses",
@@ -198,6 +218,7 @@ def test_recluster_job_default_reader_and_writer_wire_to_store_diagnoses(monkeyp
 
     assert result == {"d1": 0, "d2": 0}
     assert written == {"d1": 0, "d2": 0}
+    assert labeled == {"cluster_ids": {0: "cluster-uuid-0"}}
 
 
 def test_ingest_trace_delegates_to_injected_ingest_fn_and_returns_trace_id():
