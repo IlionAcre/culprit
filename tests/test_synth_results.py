@@ -120,9 +120,13 @@ def test_adjudicate_is_implemented_and_returns_nothing_for_no_candidates():
     assert result == []
 
 
-def test_cluster_diagnoses_stub_names_ws_f():
-    with pytest.raises(NotImplementedError, match="WS-F"):
-        cluster_diagnoses([], embed_fn=lambda texts: [])
+def test_cluster_diagnoses_is_implemented_and_returns_empty_dict_for_no_diagnoses():
+    """WS-F landed (unlike the WS-G/pipeline stub below): cluster_diagnoses()
+    no longer raises NotImplementedError. Real coverage lives in
+    tests/test_cluster.py, test_cluster_embed.py, and test_cluster_label.py."""
+    result = cluster_diagnoses([], embed_fn=lambda texts: [])
+
+    assert result == {}
 
 
 def test_pipeline_diagnose_stub_names_integration_task():
