@@ -1,0 +1,178 @@
+[
+  {
+    "trace_id": "trail-001",
+    "resourceSpans": [
+      {
+        "scopeSpans": [
+          {
+            "spans": [
+              {
+                "traceId": "trail001000000000000000000000001",
+                "spanId": "tr001a1",
+                "name": "invoke_agent order_agent",
+                "startTimeUnixNano": "1755000000000000000",
+                "endTimeUnixNano": "1755000002000000000",
+                "attributes": [
+                  {"key": "gen_ai.operation.name", "value": {"stringValue": "invoke_agent"}},
+                  {"key": "gen_ai.agent.name", "value": {"stringValue": "order_agent"}}
+                ],
+                "status": {"code": "STATUS_CODE_OK"}
+              },
+              {
+                "traceId": "trail001000000000000000000000001",
+                "spanId": "tr001a2",
+                "parentSpanId": "tr001a1",
+                "name": "chat gpt-4o-mini",
+                "startTimeUnixNano": "1755000000010000000",
+                "endTimeUnixNano": "1755000000400000000",
+                "attributes": [
+                  {"key": "gen_ai.operation.name", "value": {"stringValue": "chat"}},
+                  {"key": "gen_ai.provider.name", "value": {"stringValue": "openai"}},
+                  {"key": "gen_ai.request.model", "value": {"stringValue": "gpt-4o-mini"}},
+                  {"key": "gen_ai.output.messages", "value": {"stringValue": "[{\"role\": \"assistant\", \"tool_calls\": [{\"id\": \"call_1\", \"type\": \"function\", \"function\": {\"name\": \"send_email\", \"arguments\": \"{}\"}}]}]"}}
+                ],
+                "status": {"code": "STATUS_CODE_OK"}
+              },
+              {
+                "traceId": "trail001000000000000000000000001",
+                "spanId": "tr001a3",
+                "parentSpanId": "tr001a1",
+                "name": "execute_tool send_email",
+                "startTimeUnixNano": "1755000000410000000",
+                "endTimeUnixNano": "1755000000600000000",
+                "attributes": [
+                  {"key": "gen_ai.operation.name", "value": {"stringValue": "execute_tool"}},
+                  {"key": "gen_ai.tool.name", "value": {"stringValue": "send_email"}},
+                  {"key": "gen_ai.tool.call.id", "value": {"stringValue": "call_1"}},
+                  {"key": "gen_ai.tool.call.arguments", "value": {"stringValue": "{}"}},
+                  {"key": "gen_ai.tool.call.result", "value": {"stringValue": "sent to wrong recipient"}}
+                ],
+                "status": {"code": "STATUS_CODE_OK"}
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "errors": [
+      {"span_id": "tr001a3", "category": "wrong_tool_call", "description": "send_email was called instead of check_order_status"}
+    ]
+  },
+  {
+    "trace_id": "trail-002",
+    "resourceSpans": [
+      {
+        "scopeSpans": [
+          {
+            "spans": [
+              {
+                "traceId": "trail002000000000000000000000002",
+                "spanId": "tr002a1",
+                "name": "invoke_agent refund_agent",
+                "startTimeUnixNano": "1755000100000000000",
+                "endTimeUnixNano": "1755000102000000000",
+                "attributes": [
+                  {"key": "gen_ai.operation.name", "value": {"stringValue": "invoke_agent"}},
+                  {"key": "gen_ai.agent.name", "value": {"stringValue": "refund_agent"}}
+                ],
+                "status": {"code": "STATUS_CODE_OK"}
+              },
+              {
+                "traceId": "trail002000000000000000000000002",
+                "spanId": "tr002a2",
+                "parentSpanId": "tr002a1",
+                "name": "chat gpt-4o-mini",
+                "startTimeUnixNano": "1755000100010000000",
+                "endTimeUnixNano": "1755000100400000000",
+                "attributes": [
+                  {"key": "gen_ai.operation.name", "value": {"stringValue": "chat"}},
+                  {"key": "gen_ai.provider.name", "value": {"stringValue": "openai"}},
+                  {"key": "gen_ai.request.model", "value": {"stringValue": "gpt-4o-mini"}},
+                  {"key": "gen_ai.output.messages", "value": {"stringValue": "[{\"role\": \"assistant\", \"tool_calls\": [{\"id\": \"call_2\", \"type\": \"function\", \"function\": {\"name\": \"process_refund\", \"arguments\": \"{\\\"order_id\\\": null}\"}}]}]"}}
+                ],
+                "status": {"code": "STATUS_CODE_OK"}
+              },
+              {
+                "traceId": "trail002000000000000000000000002",
+                "spanId": "tr002a3",
+                "parentSpanId": "tr002a1",
+                "name": "execute_tool process_refund",
+                "startTimeUnixNano": "1755000100410000000",
+                "endTimeUnixNano": "1755000100600000000",
+                "attributes": [
+                  {"key": "gen_ai.operation.name", "value": {"stringValue": "execute_tool"}},
+                  {"key": "gen_ai.tool.name", "value": {"stringValue": "process_refund"}},
+                  {"key": "gen_ai.tool.call.id", "value": {"stringValue": "call_2"}},
+                  {"key": "gen_ai.tool.call.arguments", "value": {"stringValue": "{\"order_id\": null}"}},
+                  {"key": "gen_ai.tool.call.result", "value": {"stringValue": ""}}
+                ],
+                "status": {"code": "STATUS_CODE_ERROR"},
+                "status_message": "order_id must not be null"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "errors": [
+      {"span_id": "tr002a2", "category": "incorrect_tool_parameters", "description": "order_id was passed as null"}
+    ]
+  },
+  {
+    "trace_id": "trail-003",
+    "resourceSpans": [
+      {
+        "scopeSpans": [
+          {
+            "spans": [
+              {
+                "traceId": "trail003000000000000000000000003",
+                "spanId": "tr003a1",
+                "name": "invoke_agent policy_agent",
+                "startTimeUnixNano": "1755000200000000000",
+                "endTimeUnixNano": "1755000202000000000",
+                "attributes": [
+                  {"key": "gen_ai.operation.name", "value": {"stringValue": "invoke_agent"}},
+                  {"key": "gen_ai.agent.name", "value": {"stringValue": "policy_agent"}}
+                ],
+                "status": {"code": "STATUS_CODE_OK"}
+              },
+              {
+                "traceId": "trail003000000000000000000000003",
+                "spanId": "tr003a2",
+                "parentSpanId": "tr003a1",
+                "name": "chat gpt-4o-mini",
+                "startTimeUnixNano": "1755000200010000000",
+                "endTimeUnixNano": "1755000200400000000",
+                "attributes": [
+                  {"key": "gen_ai.operation.name", "value": {"stringValue": "chat"}},
+                  {"key": "gen_ai.provider.name", "value": {"stringValue": "openai"}},
+                  {"key": "gen_ai.request.model", "value": {"stringValue": "gpt-4o-mini"}}
+                ],
+                "status": {"code": "STATUS_CODE_OK"}
+              },
+              {
+                "traceId": "trail003000000000000000000000003",
+                "spanId": "tr003a3",
+                "parentSpanId": "tr003a1",
+                "name": "retrieve_documents policy_lookup",
+                "startTimeUnixNano": "1755000200410000000",
+                "endTimeUnixNano": "1755000200600000000",
+                "attributes": [
+                  {"key": "gen_ai.operation.name", "value": {"stringValue": "retrieve_documents"}},
+                  {"key": "gen_ai.retrieval.query", "value": {"stringValue": "return policy for electronics"}},
+                  {"key": "gen_ai.retrieval.documents", "value": {"stringValue": "[]"}},
+                  {"key": "gen_ai.retrieval.document.count", "value": {"intValue": "0"}}
+                ],
+                "status": {"code": "STATUS_CODE_OK"}
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "errors": [
+      {"span_id": "tr003a3", "category": "some_future_trail_category_not_yet_mapped", "description": "retrieval returned nothing and the agent proceeded anyway"}
+    ]
+  }
+]

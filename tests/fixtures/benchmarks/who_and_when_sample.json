@@ -1,0 +1,43 @@
+[
+  {
+    "case_id": "ww-001",
+    "task_goal": "Find the current CEO of the company mentioned in the ticket and email them a summary.",
+    "messages": [
+      {"agent": "planner", "content": "I will look up the company, find its CEO, then draft and send an email."},
+      {"agent": "researcher", "content": "search_web(query='company CEO 2026')"},
+      {"agent": "researcher", "content": "The CEO is Jordan Lee, according to the first search result."},
+      {"agent": "writer", "content": "send_email(to='jordan.lee@example.com', body='Summary attached.')"},
+      {"agent": "writer", "content": "Email sent successfully."}
+    ],
+    "mistake_agent": "researcher",
+    "mistake_step": 2,
+    "mistake_reason": "The agent asserted a name with no verification, fabricating a fact not present in the search snippet."
+  },
+  {
+    "case_id": "ww-002",
+    "task_goal": "Book a flight from NYC to SFO under $400 and confirm the itinerary.",
+    "messages": [
+      {"agent": "planner", "content": "I will search for flights, pick the cheapest, and confirm."},
+      {"agent": "booker", "content": "search_flights(origin='NYC', destination='SFO')"},
+      {"agent": "booker", "content": "Found a flight for $650. Booking it now."},
+      {"agent": "booker", "content": "book_flight(flight_id='UA123', price=650)"},
+      {"agent": "verifier", "content": "Booking confirmed."}
+    ],
+    "mistake_agent": "booker",
+    "mistake_step": 2,
+    "mistake_reason": "The agent violated the explicit $400 budget constraint stated in the task."
+  },
+  {
+    "case_id": "ww-003",
+    "task_goal": "Summarize the quarterly report and flag any figures that look inconsistent.",
+    "messages": [
+      {"agent": "reader", "content": "retrieve_documents(query='quarterly report Q2 2026')"},
+      {"agent": "reader", "content": "Retrieved the report, revenue is listed as $4.2M."},
+      {"agent": "checker", "content": "No inconsistencies found."},
+      {"agent": "writer", "content": "Summary: revenue was $4.2M with no flagged issues."}
+    ],
+    "mistake_agent": "checker",
+    "mistake_step": 2,
+    "mistake_reason": "The checker did not actually cross-reference the figure against the prior quarter, skipping verification entirely."
+  }
+]
