@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from culprit.synth_results import make_diagnosis, make_divergence, make_signal
 from culprit.taxonomy import FailureClass
 from culprit.views import (
@@ -90,9 +92,19 @@ def test_diagnosis_detail_view_includes_every_nested_signal_and_divergence():
 
 def test_two_diagnoses_differing_only_by_id_still_differ_only_in_id_fields():
     """A sanity check that the view is a pure projection, not accidentally
-    stable across genuinely different diagnoses."""
-    d1 = make_diagnosis(diagnosis_id="d1", trace_id="t1")
-    d2 = make_diagnosis(diagnosis_id="d2", trace_id="t1")
+    stable across genuinely different diagnoses.
+
+    created_at is pinned to one shared timestamp rather than each
+    make_diagnosis call defaulting its own `datetime.now(UTC)`: two
+    sequential calls almost never land on the exact same microsecond, so
+    the un-pinned version of this test was flaky - it failed on the
+    (usual) case where the timestamps differed, and only passed on the
+    rare tick-collision where they didn't. Pinning it makes the test
+    assert what it actually means: id fields are the only thing that
+    should differ here."""
+    created_at = datetime.now(UTC)
+    d1 = make_diagnosis(diagnosis_id="d1", trace_id="t1", created_at=created_at)
+    d2 = make_diagnosis(diagnosis_id="d2", trace_id="t1", created_at=created_at)
 
     v1, v2 = diagnosis_summary_view(d1), diagnosis_summary_view(d2)
 
