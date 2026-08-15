@@ -118,8 +118,11 @@ def test_revision_0001_never_creates_an_hnsw_index():
 def test_revision_0001_upgrade_sql_never_creates_an_hnsw_index():
     """Belt and suspenders: check the actual rendered SQL, not just the
     source file, in case a future refactor moves DDL into a helper that the
-    source-text check above would miss."""
-    result = _run_alembic_offline("upgrade", "head", "--sql")
+    source-text check above would miss. Targets "0001" explicitly, not
+    "head": revision 0002 (tests/test_migrations_0002.py) legitimately adds
+    HNSW indexes, so rendering all the way to head would false-positive here
+    once 0002 exists."""
+    result = _run_alembic_offline("upgrade", "0001", "--sql")
 
     assert result.returncode == 0, result.stderr
     assert "hnsw" not in result.stdout.lower()
