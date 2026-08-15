@@ -1,9 +1,9 @@
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
 from culprit.jobs import (
-    PersistenceNotWiredError,
     TraceNotFoundError,
     diagnose_trace_job,
     ingest_trace,
@@ -12,6 +12,8 @@ from culprit.jobs import (
 )
 from culprit.schemas import Outcome, Trace
 from culprit.synth_results import make_diagnosis
+
+_RAW_UPLOAD_FIXTURE = Path(__file__).parent / "fixtures" / "otlp" / "raw_upload_sample.json"
 
 
 def _trace(trace_id: str = "trace-1") -> Trace:
@@ -217,11 +219,27 @@ def test_ingest_trace_delegates_to_injected_ingest_fn_and_returns_trace_id():
     assert captured == {"payload": b"raw-bytes", "content_type": "application/x-protobuf"}
 
 
-def test_ingest_trace_default_ingest_fn_raises_persistence_not_wired():
-    """No single WS-A/WS-B function assembles OTLP bytes into a persisted
-    Trace yet; the default must say so clearly rather than guess."""
-    with pytest.raises(PersistenceNotWiredError, match="OTLP ingestion pipeline"):
-        ingest_trace(b"{}", "application/json", conn_fn=lambda: None)
+def test_ingest_trace_default_ingest_fn_wires_to_ingest_payload(monkeypatch):
+    """INTEGRATION_ITEMS.md / this module's own former docstring gap,
+    resolved (task I2): the default ingest_fn now composes otlp/normalize/
+    linearize/store_traces for real via ingest.ingest_payload, rather than
+    raising PersistenceNotWiredError forever. Proven with the raw_upload
+    fixture (CLAUDE.md's "third, distinct ingestion path") and
+    store_traces.write_trace monkeypatched so no real Postgres is needed."""
+    written = {}
+    monkeypatch.setattr(
+        "culprit.ingest.write_trace",
+        lambda conn_fn, trace, spans, steps, embedding=None: written.update(trace_id=trace.trace_id),
+    )
+    # Real embed_texts loads the ~130MB fastembed ONNX model; stub it so
+    # this test stays offline like every other test in the suite.
+    monkeypatch.setattr("culprit.jobs.embed_texts", lambda texts: [[0.0] * 384 for _ in texts])
+
+    result = ingest_trace(
+        _RAW_UPLOAD_FIXTURE.read_bytes(), "application/json", conn_fn=lambda: None,
+    )
+
+    assert result == written["trace_id"] == "raw-upload-7f2c19"
 
 
 def test_read_diagnoses_for_trace_delegates_to_injected_reader():

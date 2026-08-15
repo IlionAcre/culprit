@@ -1,20 +1,20 @@
 """RQ job functions run by the worker process, plus the trace-ingestion
 entrypoint api.py and cli.py both call. Business logic lives in
-pipeline.diagnose and cluster.cluster_diagnoses (the analysis-layer stubs
-from Foundation task 8) and, for ingestion, in otlp/normalize/linearize/
-store_traces (owned by WS-A and WS-B); every external seam here is
-injectable so this whole module is fully testable today, before any of
-those workstreams exist.
+pipeline.diagnose and cluster.cluster_diagnoses, and, for ingestion, in
+ingest.ingest_payload (Integration task I2, composing otlp/normalize/
+linearize/store_traces, owned by WS-A and WS-B); every external seam here
+is injectable so this whole module is fully testable with no Postgres,
+Redis, or litellm dependency.
 
-**Integration gap, flagged for task I2.** The five analysis layers were
-Foundation-stubbed at a fixed signature so callers could compile against
-them from day one; there is no equivalent stub for "assemble one OTLP
-payload into a persisted Trace", "load a Trace by id", "persist a
-Diagnosis", "read every diagnosis for reclustering", or "write a cluster
-assignment back". `_seam()` lazily imports the real function by name and
-raises a clearly-named error if it is not there yet, so `api.py`'s OTLP
-endpoint and both RQ jobs are fully built and tested now; Integration only
-supplies the real callables, not new orchestration.
+**Integration task I2, resolved.** The five analysis layers and the
+persistence functions were Foundation/WS-B-stubbed or -built at a fixed
+signature so callers could compile against them from day one; `_seam()`
+lazily imports the real function by name and raises a clearly-named error
+if it is not there yet. Every default seam below now resolves to a real
+implementation: `pipeline.diagnose` (I1), `store_traces.read_trace`/
+`write_diagnosis`/`read_all_diagnoses` (WS-B), `store_clusters.
+write_cluster_assignments` (WS-F, repointed here per INTEGRATION_ITEMS.md
+item 4), and `ingest.ingest_payload` (this task, `_default_ingest` below).
 """
 
 import logging
@@ -125,18 +125,16 @@ def _default_cluster_writer(conn_fn: ConnFn, assignment: dict) -> None:
 
 
 def _default_ingest(payload: bytes, content_type: str, conn_fn: ConnFn) -> str:
-    """No single WS-A/WS-B function assembles one OTLP payload into a
-    persisted Trace end to end: needs otlp.decode, normalize.normalize_span
-    per raw span, linearize.linearize, a Trace built from the result, and
-    store_traces.write_trace, nowhere composed behind one callable in the
-    plan. Left as an explicit gap rather than a guess at unspecified
-    plumbing: inject `ingest_fn` until Integration wires this (task I2)."""
-    raise PersistenceNotWiredError(
-        "OTLP ingestion pipeline is not wired yet: needs otlp.decode, "
-        "normalize.normalize_span, linearize.linearize, and "
-        "store_traces.write_trace composed into one flow, which is "
-        "Integration's job (task I2). Inject ingest_fn explicitly until then."
-    )
+    """Integration task I2, resolved: composes otlp.decode (or the direct
+    JSON upload envelope), normalize.normalize_span, linearize.linearize,
+    and store_traces.write_trace via ingest.ingest_payload - see that
+    module's docstring for why the composition needed its own module
+    rather than living inline here. embed_texts is passed through so a
+    real ingest also gets `task_embedding` populated, not just spans/steps.
+    """
+    from culprit.ingest import ingest_payload
+
+    return ingest_payload(payload, content_type, conn_fn, embed_fn=embed_texts)
 
 
 def diagnose_trace_job(
