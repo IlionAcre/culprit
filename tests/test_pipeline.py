@@ -2,12 +2,14 @@
 together rather than only compiling against their signatures, and proves
 the per-layer isolation mechanism CLAUDE.md calls the honesty mechanism of
 the whole system - a layer that raises degrades the diagnosis into
-`degraded_layers` instead of crashing the run. Wired incrementally (L0+L1
-first); tests for L2/L3 land alongside their own wiring.
+`degraded_layers` instead of crashing the run. Wired incrementally
+(L0+L1, then L2, then L3); each layer's own tests monkeypatch the layers
+below it to a clean result so a given test only exercises the layer it
+names, matching the isolation the production code itself provides.
 """
 
 from culprit.pipeline import diagnose
-from culprit.signals import Diagnosis
+from culprit.signals import ContrastResult, Diagnosis, DivergenceCandidate
 from culprit.synth import successful_run
 from culprit.synth_inject import inject
 
@@ -18,6 +20,14 @@ def _fake_call_fn(model, prompt):
 
 def _fake_embed_fn(texts):
     return [[0.0] * 384 for _ in texts]
+
+
+def _clean_contrast(*args, **kwargs) -> ContrastResult:
+    """A non-abstained, zero-candidate L2 result: used to isolate tests that
+    are about L0/L1 wiring from L2's own real execution, which needs a real
+    Postgres connection this test suite never has (conn_fn=lambda: None).
+    L2's own wiring/isolation gets its own tests below."""
+    return ContrastResult(candidates=[], reference_count=5, abstained=False, abstain_reason=None)
 
 
 def test_diagnose_wires_l0_and_l1_and_finds_the_injected_signal(monkeypatch):
@@ -32,6 +42,7 @@ def test_diagnose_wires_l0_and_l1_and_finds_the_injected_signal(monkeypatch):
     monkeypatch.setattr(
         "culprit.pipeline.read_trace", lambda conn_fn, trace_id: (run.trace, run.spans, run.steps)
     )
+    monkeypatch.setattr("culprit.pipeline.contrast", _clean_contrast)
 
     diagnosis = diagnose(
         run.trace, conn_fn=lambda: None, call_fn=_fake_call_fn, embed_fn=_fake_embed_fn, model="m",
@@ -55,6 +66,7 @@ def test_diagnose_degrades_l0_instead_of_crashing_when_read_trace_raises(monkeyp
         raise RuntimeError("connection pool exhausted")
 
     monkeypatch.setattr("culprit.pipeline.read_trace", _boom)
+    monkeypatch.setattr("culprit.pipeline.contrast", _clean_contrast)
 
     diagnosis = diagnose(
         base.trace, conn_fn=lambda: None, call_fn=_fake_call_fn, embed_fn=_fake_embed_fn, model="m",
@@ -79,6 +91,7 @@ def test_diagnose_degrades_l1_instead_of_crashing_when_run_detectors_raises(monk
         raise ValueError("detector catalogue exploded")
 
     monkeypatch.setattr("culprit.pipeline.run_detectors", _boom)
+    monkeypatch.setattr("culprit.pipeline.contrast", _clean_contrast)
 
     diagnosis = diagnose(
         base.trace, conn_fn=lambda: None, call_fn=_fake_call_fn, embed_fn=_fake_embed_fn, model="m",
@@ -89,6 +102,78 @@ def test_diagnose_degrades_l1_instead_of_crashing_when_run_detectors_raises(monk
     assert diagnosis.signals == []
 
 
+def _fake_divergence(step_index: int = 5) -> DivergenceCandidate:
+    return DivergenceCandidate(
+        step_index=step_index, span_id=f"s{step_index}", divergence_score=0.7,
+        cliff_delta=0.5, surprisal=1.0, profile_surprisal=1.0, reference_count=10,
+        observed_signature="tool:agent:refund_order:ok",
+        expected_signatures=[("tool:agent:search_orders:ok", 0.8)],
+        nearest_reference_trace_ids=["t1"], alignment_op="mismatch",
+    )
+
+
+def test_diagnose_wires_l2_and_carries_divergences_through_when_contrast_succeeds(monkeypatch):
+    """Proves contrast() is really called (not skipped) and its candidates
+    flow into Diagnosis.divergences untouched."""
+    base = successful_run(seed=5)
+    monkeypatch.setattr(
+        "culprit.pipeline.read_trace", lambda conn_fn, trace_id: (base.trace, base.spans, base.steps)
+    )
+    divergence = _fake_divergence()
+    monkeypatch.setattr(
+        "culprit.pipeline.contrast",
+        lambda *a, **kw: ContrastResult(candidates=[divergence], reference_count=10, abstained=False, abstain_reason=None),
+    )
+
+    diagnosis = diagnose(
+        base.trace, conn_fn=lambda: None, call_fn=_fake_call_fn, embed_fn=_fake_embed_fn, model="m",
+    )
+
+    assert diagnosis.degraded_layers == []
+    assert diagnosis.divergences == [divergence]
+
+
+def test_diagnose_degrades_l2_with_the_abstain_reason_when_contrast_abstains(monkeypatch):
+    """A designed abstention (too few references) is exactly as materially
+    weaker a diagnosis as a crash - CLAUDE.md's honesty mechanism - so it
+    must land in degraded_layers too, carrying the reason, not just an
+    empty divergences list with no explanation."""
+    base = successful_run(seed=6)
+    monkeypatch.setattr(
+        "culprit.pipeline.read_trace", lambda conn_fn, trace_id: (base.trace, base.spans, base.steps)
+    )
+    monkeypatch.setattr(
+        "culprit.pipeline.contrast",
+        lambda *a, **kw: ContrastResult(candidates=[], reference_count=1, abstained=True, abstain_reason="insufficient_references"),
+    )
+
+    diagnosis = diagnose(
+        base.trace, conn_fn=lambda: None, call_fn=_fake_call_fn, embed_fn=_fake_embed_fn, model="m",
+    )
+
+    assert diagnosis.degraded_layers == ["l2:insufficient_references"]
+    assert diagnosis.divergences == []
+
+
+def test_diagnose_degrades_l2_instead_of_crashing_when_contrast_raises(monkeypatch):
+    base = successful_run(seed=7)
+    monkeypatch.setattr(
+        "culprit.pipeline.read_trace", lambda conn_fn, trace_id: (base.trace, base.spans, base.steps)
+    )
+
+    def _boom(*a, **kw):
+        raise RuntimeError("alignment blew up")
+
+    monkeypatch.setattr("culprit.pipeline.contrast", _boom)
+
+    diagnosis = diagnose(
+        base.trace, conn_fn=lambda: None, call_fn=_fake_call_fn, embed_fn=_fake_embed_fn, model="m",
+    )
+
+    assert diagnosis.degraded_layers == ["l2"]
+    assert diagnosis.divergences == []
+
+
 def test_diagnose_records_layer_versions_and_abstains_with_no_adjudications_yet(monkeypatch):
     """L2/L3 are not wired in this revision, so with zero adjudications the
     trace-level verdict must abstain rather than fabricate a root cause -
@@ -97,6 +182,7 @@ def test_diagnose_records_layer_versions_and_abstains_with_no_adjudications_yet(
     monkeypatch.setattr(
         "culprit.pipeline.read_trace", lambda conn_fn, trace_id: (base.trace, base.spans, base.steps)
     )
+    monkeypatch.setattr("culprit.pipeline.contrast", _clean_contrast)
 
     diagnosis = diagnose(
         base.trace, conn_fn=lambda: None, call_fn=_fake_call_fn, embed_fn=_fake_embed_fn, model="m",

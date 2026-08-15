@@ -27,11 +27,13 @@ internally, so it is threaded through as a required keyword argument, exactly
 like `conn_fn`/`call_fn`/`embed_fn`.
 """
 
+import functools
 import logging
 import uuid
 from datetime import UTC, datetime
 
 from culprit.confidence import select_diagnosis
+from culprit.contrast import contrast
 from culprit.db import ConnFn
 from culprit.embed import EmbedFn
 from culprit.llm import CallFn
@@ -40,6 +42,7 @@ from culprit.run_detectors import run_detectors
 from culprit.schemas import Trace
 from culprit.signals import Diagnosis, DivergenceCandidate, Signal
 from culprit.store_traces import read_trace
+from culprit.store_traces_query import nearest_successful
 
 logger = logging.getLogger(LOGGER_NAME)
 
@@ -73,9 +76,9 @@ def diagnose(
 
     Every layer below is wrapped in its own `try/except`: a raise in one
     layer never stops the layers after it from running, it only costs that
-    layer's contribution and adds its name to `degraded_layers`. This is
-    filled in incrementally as L2/L3 wiring lands; L0+L1 wiring in this
-    revision is the first proven slice of that isolation mechanism.
+    layer's contribution and adds its name to `degraded_layers`. L0, L1, and
+    L2 are wired as of this revision; L3 (and the candidate merge that feeds
+    it) lands in a following revision, wired here as an empty result.
     """
     degraded_layers: list[str] = []
 
@@ -97,9 +100,29 @@ def diagnose(
         )
         degraded_layers.append("l1")
 
-    # L2 and L3 land in a following revision; wired here as empty results so
-    # this slice is a complete, correct function on its own.
     divergences: list[DivergenceCandidate] = []
+    try:
+        neighbor_fn = functools.partial(nearest_successful, conn_fn)
+        result = contrast(trace, steps, spans_by_id, neighbor_fn=neighbor_fn, conn_fn=conn_fn, embed_fn=embed_fn)
+        if result.abstained:
+            # A clean, designed abstention (e.g. insufficient_references) is
+            # exactly as materially weaker a diagnosis as a crash would be -
+            # both mean L2 contributed nothing, and both must say so rather
+            # than silently leaving divergences empty with no explanation.
+            logger.info(
+                "L2 abstained", extra={"event": "pipeline_l2_abstained", "trace_id": trace.trace_id, "reason": result.abstain_reason},
+            )
+            degraded_layers.append(f"l2:{result.abstain_reason}")
+        else:
+            divergences = result.candidates
+    except Exception as exc:  # noqa: BLE001 - layer isolation is the point
+        logger.warning(
+            "L2 contrast failed", extra={"event": "pipeline_l2_failed", "trace_id": trace.trace_id, "error": str(exc)},
+        )
+        degraded_layers.append("l2")
+
+    # L3 lands in a following revision; wired here as an empty result so
+    # this slice is a complete, correct function on its own.
     adjudications: list = []
 
     verdict = select_diagnosis(adjudications)
