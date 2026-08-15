@@ -332,12 +332,13 @@ problem as detecting an anomalous step sequence in an agent trace.
   RADAR: Intelligent Early Fraud Detection with Humans in the Loop"** (2022):
   presenting ranked suspects to a human rather than a verdict.
 
-- **Calibration ships as hand-set coefficients, documented as uncalibrated
-  priors, not fitted values.** `bench_score.py` reports Brier, ECE, and
-  reliability points from day one so they can be fit by logistic regression
-  once labeled data exists. Claiming calibration that has not been measured
-  is exactly what the Litmus decision log calls out repeatedly; culprit does
-  not repeat that mistake.
+- **The coefficients in `src/culprit/confidence.py` are hand-set priors that
+  have never been fitted to anything, because no labeled data exists yet.**
+  `bench_score.py` reports Brier, ECE, and reliability points from day one so
+  they can be fit by logistic regression once labeled data exists. Do not
+  describe anything in this system as calibrated; claiming calibration that
+  has not been measured is exactly the unearned claim the Litmus decision
+  log calls out repeatedly, and culprit does not repeat that mistake.
   - The cite-check term (fraction of `cited_step_indices` actually present
     in the context packet) is the highest-value term in the formula: a
     rationale citing step 47 when only 12-16 were shown is direct evidence
@@ -581,9 +582,106 @@ match the other two fixtures' step sequence.
   unrecognized vocabularies. Set `normalize_error` and keep the raw dict; a
   later vocabulary module depends on that data still being there.
 
+## Phase 1 workstream decisions (consolidated)
+
+Decisions that were recorded only in commit messages or module docstrings are
+brought into this file here so they are not re-litigated later.
+
+### WS-A: Ingestion and linearization
+
+- **OTLP payloads are decoded by hand, not via `google.protobuf.json_format`.** Real OTLP JSON exporters use lowercase hex strings for `traceId`/`spanId` and encode `int64` fields and nanosecond timestamps as JSON strings; strict protobuf-JSON mapping would base64-encode the IDs and leave numbers as numbers. Decoding both protobuf and JSON wire formats into the same flat span-dict shape keeps `vocab/` and `normalize.py` transport-agnostic.
+- **Vocabulary failures are isolated once in `normalize.py`.** A bad JSON attribute or a missing required field in one vocabulary module is caught at dispatch, and the raw attributes are retained with `normalize_error` set so a later vocabulary module can backfill without re-ingesting.
+
+### WS-B: Persistence
+
+- **Read/write round trips are split from analytical queries.** `store_traces.py` handles the `Trace`/`Span`/`Step` round trip; `store_traces_query.py` holds `nearest_successful` and `prune_attributes`. The two change for different reasons (domain model shape versus index strategy and retention policy) and the combined module had grown past the ~200-line ceiling.
+- **Diagnoses, cluster assignments, and cluster labels each have their own store module.** `store_diagnoses.py`, `store_clusters.py`, and `store_cluster_labels.py` are split because reading/writing a `Diagnosis`, mapping HDBSCAN integer labels to stable `cluster_id`s, and persisting label text are three different concerns with different reasons to change.
+
+### WS-C: L1 detectors
+
+- **`missing_verification` is gated on `trace.outcome == FAILURE`.** Verification is genuinely optional in roughly half of clean synth runs, so a pure presence check cannot distinguish a legitimate skip from an injected one. The gate is safe only because L1 never runs on successful traces.
+- **`unused_retrieval` was restored to the catalogue's literal "<15% token overlap with next prompt" test after `synth.py` began folding retrieved documents into the next LLM prompt.** Before that generator fix, synth prompts were independent hand-authored strings with no retrieved content, so the literal test fired on every retrieval. The detector was temporarily reimplemented as query coverage; restoring the spec required changing the generator, not the detector.
+- **`stall_timeout` uses an in-trace proxy instead of the spec's cross-trace ">5x median for that signature".** L1 has no historical reference pool, so it compares each step's duration against the median duration of the same *kind* within this trace. That still catches one step stalling far longer than everything around it.
+
+### WS-D: L2 contrastive
+
+- **`contrast()` takes `spans_by_id`, mirroring `run_detectors(trace, steps, spans_by_id)`.** The original frozen contract passed only `steps`, leaving `signature.sim`'s tool-argument and retrieved-document features structurally unreachable. Passing spans makes those three features real and lets the contrastive layer see payload-derived facts.
+- **The point-of-no-return gate uses a length-normalized rate and compares it to the best rate observed anywhere in the trace.** Raw residual alignability `A(i)` shrinks merely because the suffix has fewer steps left, so comparing raw `A(i)` to `A(0)` would mark every tail eligible. A fault near the start also drags `rate(0)` down with itself, muting the drop the gate exists to catch.
+- **`signature.sim` treats "both sides lack this feature" as agreement (1.0), not a fixed neutral 0.5.** Two steps that both have no arguments, or both have no retrieved docs, trivially agree on that fact; scoring them 0.5 would punish agreement.
+  - *Rejected: keep a fixed 0.5 fallback for missing span data* - would make unrelated steps that simply share the absence of a feature look less similar than they are.
+
+### WS-E: L3 adjudication
+
+- **`adjudicate()` and `build_context_packet()` gained an optional `spans_by_id` keyword (default `None`).** Integration item 2: the original signature passed only `Trace` and `list[Step]`, and `Step.summary` is a short templated sentence rather than raw payload text, so the spec's zoom window could not be built as written. When `spans_by_id` is supplied, neighbours i-2..i+2 render real payload text; existing WS-E tests that omit it keep passing unchanged.
+
+### WS-F: L5 clustering
+
+- **Cluster identity across passes is resolved by membership overlap, not by threading a stable `run_id`.** HDBSCAN integer labels are artifacts of cluster discovery order within one `fit_predict` call, not stable names for cluster content. Pinning `run_id` and deriving `uuid5(run_id, label)` would collide unrelated clusters that happened to both be born "label 0" and would miss real matches when discovery order relabels a stable cluster. `store_clusters.resolve_cluster_identity` takes a majority vote of this pass's member diagnoses against existing `diagnoses.cluster_id`; a previously persisted `cluster_id` can be claimed by only one new group so a split cluster does not hand the same identity to both halves.
+- **Only clusters that were actually re-labeled are written back.** Reusing a prior label must not advance `labeled_at`, or the cost-control invariant would lie about when an LLM summary was generated. `store_cluster_labels.write_cluster_labels` re-runs `needs_relabel` to decide which rows to update.
+- **`diagnoses.card_text`/`card_embedding` remain unwritten.** Those columns live on `diagnoses`, not `clusters`, and nothing in the plan specifies a caller that renders and embeds a card purely to persist it outside the clustering pass that already consumes it in memory. Left as a known gap rather than guessed at.
+
+### WS-G: Service surface
+
+- **A failed RQ job's `exc_string` is never returned by `GET /jobs/{id}`.** The traceback can contain filesystem paths, a Postgres DSN, a Redis URL, or request/response fragments. `queue.fetch_job_status` logs the detail once by `job_id` and returns a generic message plus the same `job_id`.
+- **Every default seam in `jobs.py` resolves to a real implementation.** `_seam()` lazily imports by name so callers compiled against stubs; Integration I2 repointed the cluster-writer seam at `store_clusters`, wired `pipeline.diagnose`, and added `ingest.ingest_payload`.
+
+### WS-H: Benchmark harness
+
+- **TRAIL and Who&When adapters produce canonical `Trace`/`Span`/`Step` objects and run through real production code.** This is the difference between exercising the pipeline and special-casing benchmark data.
+- **Who&When's synthetic root is `SpanKind.CHAIN`, not `AGENT`.** `linearize.py` folds CHAIN spans into the next semantic step's `collapsed_span_ids` rather than giving them their own step index. If the root were AGENT it would consume step 0 and shift every subsequent message, breaking the direct `mistake_step == ground_truth_step_index` mapping the plan promises.
+- **`ground_truth_failure_class` is always `FailureClass.UNKNOWN` for Who&When.** Who&When's ground truth is a free-text `mistake_reason`, not a labeled taxonomy, so there is nothing to map.
+
+### Integration I1-I3
+
+- **`pipeline.diagnose` threads `model` as a required keyword argument.** Foundation amendment found by WS-G: `adjudicate()` requires a model string, core modules never import `config`, so the caller must supply it.
+- **Per-layer isolation is the point of `pipeline.diagnose`.** A layer that raises degrades the diagnosis and records itself in `degraded_layers`; L2 additionally degrades on a clean abstention because an abstained L2 is materially weaker than a working one.
+- **L5 clustering is deliberately not called from `pipeline.diagnose`.** `jobs.recluster_job` runs it as a scheduled batch over the accumulated diagnosis corpus; a single new diagnosis is not a meaningful clustering input.
+- **`ingest.py` composes the full OTLP/raw-upload to persisted-Trace path.** No frozen contract had assembled `otlp.decode` -> `normalize_span` -> `linearize` -> `store_traces.write_trace`; I2 built that composition.
+- **Alembic revision 0002 adds HNSW indexes and makes `steps.actor`/`steps.summary` NOT NULL.** HNSW indexes ship after the table DDL so a large initial backfill is not slowed by index maintenance on every insert; `NOT NULL` tightens the DDL rather than loosening the `Step` model because `linearize.py` always produces concrete strings.
+
+## Measured results so far
+
+Recorded here so they are not lost, and because the plan requires the
+unflattering numbers be written down alongside the good ones.
+
+**L2 contrastive, against `synth` traces with known injection index.**
+Top-1 40 percent (8 of 20 kinds), recall@5 65 percent (13 of 20). Across the 18
+kinds where any mechanism reaches `contrast()` at all: top-1 44 percent,
+recall@5 72 percent. The plan's definition of done asks for top-1 at 80 percent
+of injection kinds. We are at half that.
+
+No scoring weight, threshold, or gap penalty was tuned to produce these. That
+was deliberate: an honest 40 percent with a diagnosis of what limits it is worth
+more than a tuned number that means nothing.
+
+**Ablation.** Removing the point-of-no-return gate and the plateau collapse
+changes top-1 accuracy by exactly zero, because the cliff term at weight 0.40
+decides the ranking on its own. The gate is still load-bearing for suppressing
+false positives on identical traces. Do not remove either on the strength of the
+top-1 number alone.
+
+**RAG context injection, null result.** Folding retrieved document content into
+the following LLM prompt moved L2 accuracy by nothing at all, byte-identical
+before and after. Cause: `contrast.py`, `signature.py`, and `reference.py` never
+read message text. `sim()`'s eight features and the coarse signature token
+operate purely on structured payload fields. Prompt realism cannot move a
+feature vector that never inspects prompts. The change still earns its place by
+unblocking `unused_retrieval` at L1, which does read message text.
+
+## What was never run
+
+A reader must not be able to mistake this for a benchmarked system.
+
+- **No live Postgres exists on this machine.** A container attempt failed on
+  host port forwarding, not on code. 18 tests and Alembic revision 0002 are
+  written but unexecuted.
+- **The benchmark harness has never scored a real dataset.** TRAIL and
+  Who&When are not available offline, so both adapters were built against
+  hand-written 3-record fixtures. `TRAIL_CATEGORY_MAP`'s keys are best-effort
+  guesses at TRAIL's taxonomy, flagged as such in `trail.py`.
+
 ## Status
 
-Phase 0 (Foundation) is in progress. See `AI_docs/PHASES.md` for the current
-task-by-task status, the Phase 1 workstream table, and the Phase 2
-integration checklist; that file is the authoritative resume point, not this
-section.
+Phase 2 closeout is in progress on branch `phase-2-closeout`. See
+`AI_docs/PHASES.md` for the authoritative resume point, the Phase 1
+workstream table, and the Phase 2 integration checklist.
