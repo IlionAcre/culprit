@@ -101,7 +101,12 @@ def _sentinel_adjudication(candidate: Candidate, model: str, error: str) -> Adju
 def _adjudication_from_verdict(
     candidate: Candidate, packet: ContextPacket, verdict: _AdjudicationVerdict,
     model: str, cost_usd: float | None,
+    prompt_tokens: int | None, completion_tokens: int | None,
 ) -> Adjudication:
+    """Builds a non-abstained Adjudication from the model's parsed verdict.
+    Token counts are threaded through from CallFn so the narrow-then-adjudicate
+    cost claim can be proven from the adjudications table rather than asserted
+    (INTEGRATION_ITEMS.md backlog item 6)."""
     density = cite_check(verdict.cited_step_indices, packet.visible_step_indices)
     agreement = agrees_with_l1([s.category for s in candidate.signals], verdict.failure_class.value)
     calibrated = calibrate_confidence(verdict.confidence, candidate.prior, agreement, density)
@@ -117,11 +122,8 @@ def _adjudication_from_verdict(
         cited_step_indices=list(verdict.cited_step_indices),
         abstained=False,
         model=model,
-        # CallFn (llm.py) returns (raw_output, latency_ms, cost_usd), no
-        # token counts - these fields stay None until CallFn's contract
-        # grows one. Flagged in this workstream's handoff report.
-        prompt_tokens=None,
-        completion_tokens=None,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
         cost_usd=cost_usd,
         error=None,
     )
@@ -141,9 +143,11 @@ def _process_candidate(
             candidate, trace, steps, token_budget=token_budget, spans_by_id=spans_by_id,
         )
         prompt = build_prompt(candidate, packet)
-        raw_output, _latency_ms, cost_usd = call_fn(model, prompt)
+        raw_output, _latency_ms, cost_usd, prompt_tokens, completion_tokens = call_fn(model, prompt)
         verdict = _parse_verdict(raw_output)
-        return _adjudication_from_verdict(candidate, packet, verdict, model, cost_usd)
+        return _adjudication_from_verdict(
+            candidate, packet, verdict, model, cost_usd, prompt_tokens, completion_tokens,
+        )
     except Exception as e:  # noqa: BLE001 - deliberately broad, see docstring
         return _sentinel_adjudication(candidate, model, error=f"{type(e).__name__}: {e}")
 

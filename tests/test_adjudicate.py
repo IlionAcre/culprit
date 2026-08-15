@@ -41,7 +41,7 @@ def _verdict_json(step_index: int, **overrides) -> str:
 
 
 def test_adjudicate_returns_an_empty_list_for_no_candidates():
-    assert adjudicate([], _trace(), [], call_fn=lambda m, p: ("{}", 0.0, 0.0), model="m") == []
+    assert adjudicate([], _trace(), [], call_fn=lambda m, p: ("{}", 0.0, 0.0, 0, 0), model="m") == []
 
 
 def _judged_step(prompt: str) -> int:
@@ -63,7 +63,7 @@ def test_adjudicate_calls_call_fn_once_per_candidate_and_preserves_input_order()
     def call_fn(model, prompt):
         step_in_prompt = _judged_step(prompt)
         calls.append(step_in_prompt)
-        return _verdict_json(step_in_prompt), 5.0, 0.001
+        return _verdict_json(step_in_prompt), 5.0, 0.001, 20, 8
 
     result = adjudicate(candidates, _trace(), steps, call_fn=call_fn, model="m")
 
@@ -76,7 +76,7 @@ def test_adjudicate_produces_a_valid_adjudication_from_a_clean_response():
     candidates = [_candidate(1)]
 
     def call_fn(model, prompt):
-        return _verdict_json(1), 5.0, 0.002
+        return _verdict_json(1), 5.0, 0.002, 12, 4
 
     result = adjudicate(candidates, _trace(), steps, call_fn=call_fn, model="gpt-test")
 
@@ -89,6 +89,8 @@ def test_adjudicate_produces_a_valid_adjudication_from_a_clean_response():
     assert a.error is None
     assert a.model == "gpt-test"
     assert a.cost_usd == 0.002
+    assert a.prompt_tokens == 12
+    assert a.completion_tokens == 4
 
 
 # --- de-fencing: the four cases proven against real model output in
@@ -99,7 +101,7 @@ def test_adjudicate_strips_markdown_code_fence_with_language_tag():
     steps = [_step(i) for i in range(3)]
     raw = f"```json\n{_verdict_json(1)}\n```"
 
-    result = adjudicate([_candidate(1)], _trace(), steps, call_fn=lambda m, p: (raw, 1.0, 0.0), model="m")
+    result = adjudicate([_candidate(1)], _trace(), steps, call_fn=lambda m, p: (raw, 1.0, 0.0, 10, 5), model="m")
 
     assert result[0].error is None
     assert result[0].is_root_cause is True
@@ -109,7 +111,7 @@ def test_adjudicate_strips_bare_code_fence_without_language_tag():
     steps = [_step(i) for i in range(3)]
     raw = f"```\n{_verdict_json(1)}\n```"
 
-    result = adjudicate([_candidate(1)], _trace(), steps, call_fn=lambda m, p: (raw, 1.0, 0.0), model="m")
+    result = adjudicate([_candidate(1)], _trace(), steps, call_fn=lambda m, p: (raw, 1.0, 0.0, 10, 5), model="m")
 
     assert result[0].error is None
 
@@ -118,7 +120,7 @@ def test_adjudicate_strips_single_line_code_fence_with_no_internal_newline():
     steps = [_step(i) for i in range(3)]
     raw = f"```{_verdict_json(1)}```"
 
-    result = adjudicate([_candidate(1)], _trace(), steps, call_fn=lambda m, p: (raw, 1.0, 0.0), model="m")
+    result = adjudicate([_candidate(1)], _trace(), steps, call_fn=lambda m, p: (raw, 1.0, 0.0, 10, 5), model="m")
 
     assert result[0].error is None
 
@@ -127,7 +129,7 @@ def test_adjudicate_strips_code_fence_with_prose_before_it():
     steps = [_step(i) for i in range(3)]
     raw = f"Here is my answer:\n```json\n{_verdict_json(1)}\n```"
 
-    result = adjudicate([_candidate(1)], _trace(), steps, call_fn=lambda m, p: (raw, 1.0, 0.0), model="m")
+    result = adjudicate([_candidate(1)], _trace(), steps, call_fn=lambda m, p: (raw, 1.0, 0.0, 10, 5), model="m")
 
     assert result[0].error is None
 
@@ -138,7 +140,7 @@ def test_adjudicate_produces_a_sentinel_abstained_adjudication_on_an_unparseable
     steps = [_step(i) for i in range(3)]
     raw = "I think this passes, looks good to me!"
 
-    result = adjudicate([_candidate(1)], _trace(), steps, call_fn=lambda m, p: (raw, 1.0, 0.0), model="m")
+    result = adjudicate([_candidate(1)], _trace(), steps, call_fn=lambda m, p: (raw, 1.0, 0.0, 10, 5), model="m")
 
     a = result[0]
     assert a.abstained is True
@@ -170,7 +172,7 @@ def test_adjudicate_one_failing_candidate_does_not_cost_the_others():
         step_in_prompt = _judged_step(prompt)
         if step_in_prompt == 2:
             raise RuntimeError("boom")
-        return _verdict_json(step_in_prompt), 1.0, 0.0
+        return _verdict_json(step_in_prompt), 1.0, 0.0, 10, 5
 
     result = adjudicate(candidates, _trace(), steps, call_fn=call_fn, model="m")
 
@@ -193,12 +195,12 @@ def test_out_of_window_citation_measurably_lowers_calibrated_confidence():
 
     grounded = adjudicate(
         [candidate], _trace(), steps,
-        call_fn=lambda m, p: (_verdict_json(2, cited_step_indices=[2]), 1.0, 0.0),
+        call_fn=lambda m, p: (_verdict_json(2, cited_step_indices=[2]), 1.0, 0.0, 10, 5),
         model="m",
     )[0]
     confabulated = adjudicate(
         [candidate], _trace(), steps,
-        call_fn=lambda m, p: (_verdict_json(2, cited_step_indices=[9999]), 1.0, 0.0),
+        call_fn=lambda m, p: (_verdict_json(2, cited_step_indices=[9999]), 1.0, 0.0, 10, 5),
         model="m",
     )[0]
 
@@ -211,7 +213,7 @@ def test_adjudicate_max_workers_one_runs_sequentially_with_the_same_result():
 
     result = adjudicate(
         candidates, _trace(), steps,
-        call_fn=lambda m, p: (_verdict_json(1), 1.0, 0.0), model="m", max_workers=1,
+        call_fn=lambda m, p: (_verdict_json(1), 1.0, 0.0, 10, 5), model="m", max_workers=1,
     )
 
     assert result[0].is_root_cause is True
