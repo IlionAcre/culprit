@@ -19,16 +19,12 @@ NULL; `store_clusters.write_cluster_assignments` is the only writer of
 codebase yet - rendering and embedding the card is `cluster_embed.py`'s job
 (WS-F, not built yet), flagged as an Integration item rather than guessed at.
 
-**Compatibility re-export, temporary.** `jobs.py` (WS-G, not owned by this
-workstream) hardcodes `_seam("store_diagnoses", "write_cluster_assignments",
-...)` - it was written when this module was one file. The real
-implementation now lives in `store_clusters.py`; the import below only keeps
-`jobs.py`'s existing seam name resolving (and `tests/test_jobs.py`'s
-`monkeypatch.setattr("culprit.store_diagnoses.write_cluster_assignments",
-...)` working unchanged) without editing `jobs.py`, which this workstream
-does not own. **Integration item**: repoint `jobs.py`'s `_default_cluster_writer`
-at `_seam("store_clusters", "write_cluster_assignments", ...)` directly, then
-delete this re-export.
+**INTEGRATION_ITEMS.md item 4, resolved.** This module used to re-export
+`store_clusters.write_cluster_assignments` so `jobs.py`'s
+`_seam("store_diagnoses", "write_cluster_assignments", ...)` kept resolving
+after the real implementation moved to `store_clusters.py`. `jobs.py`'s
+`_default_cluster_writer` now points at `_seam("store_clusters",
+"write_cluster_assignments", ...)` directly, so the re-export is gone.
 """
 
 from dataclasses import asdict
@@ -39,7 +35,6 @@ from psycopg.types.json import Jsonb
 
 from culprit.db import ConnFn
 from culprit.signals import Adjudication, Diagnosis, DivergenceCandidate, Evidence, Signal
-from culprit.store_clusters import write_cluster_assignments as write_cluster_assignments  # noqa: F401
 
 
 def write_diagnosis(conn_fn: ConnFn, diagnosis: Diagnosis) -> None:

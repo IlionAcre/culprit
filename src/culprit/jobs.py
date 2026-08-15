@@ -115,10 +115,13 @@ def _default_all_diagnoses_reader(conn_fn: ConnFn) -> list[Diagnosis]:
 
 
 def _default_cluster_writer(conn_fn: ConnFn, assignment: dict) -> None:
-    """Same caveat: persisting a cluster_id per diagnosis_id has no
-    documented WS-B function name either."""
-    note = "(not part of WS-B's contract either; inject cluster_writer)"
-    _seam("store_diagnoses", "write_cluster_assignments", note)(conn_fn, assignment)
+    """INTEGRATION_ITEMS.md item 4: the real function lives in
+    store_clusters.py (split out of store_diagnoses.py once that module hit
+    the line ceiling), not store_diagnoses.py. This seam now points there
+    directly; store_diagnoses.write_cluster_assignments was a temporary
+    re-export kept only so this seam name kept resolving, now deleted."""
+    note = "(not part of WS-B's original contract; inject cluster_writer)"
+    _seam("store_clusters", "write_cluster_assignments", note)(conn_fn, assignment)
 
 
 def _default_ingest(payload: bytes, content_type: str, conn_fn: ConnFn) -> str:

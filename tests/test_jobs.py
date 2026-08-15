@@ -170,20 +170,21 @@ def test_recluster_job_reads_all_diagnoses_and_clusters_and_writes(monkeypatch):
 
 
 def test_recluster_job_default_reader_and_writer_wire_to_store_diagnoses(monkeypatch):
-    """store_diagnoses.py now exists (WS-B) with the exact names jobs.py's
-    docstring guessed (`read_all_diagnoses`, `write_cluster_assignments`):
-    both default seams must resolve to the real functions rather than
+    """store_diagnoses.py now exists (WS-B) with the exact reader name
+    jobs.py's docstring guessed (`read_all_diagnoses`); the writer,
+    `write_cluster_assignments`, lives in the sibling `store_clusters.py`
+    (INTEGRATION_ITEMS.md item 4 - jobs.py's seam was repointed there
+    directly once the temporary store_diagnoses re-export was deleted).
+    Both default seams must resolve to the real functions rather than
     raising `PersistenceNotWiredError` forever. Proven by monkeypatching the
     real functions (not the seams) and checking the job's return value and
-    the writer's captured call both come from that real wiring path. Stale
-    side of the WS-B/WS-G handshake, same resolution as the sibling
-    trace-loader test above."""
+    the writer's captured call both come from that real wiring path."""
     diagnoses = [make_diagnosis(diagnosis_id="d1"), make_diagnosis(diagnosis_id="d2")]
     written = {}
 
     monkeypatch.setattr("culprit.store_diagnoses.read_all_diagnoses", lambda conn_fn: diagnoses)
     monkeypatch.setattr(
-        "culprit.store_diagnoses.write_cluster_assignments",
+        "culprit.store_clusters.write_cluster_assignments",
         lambda conn_fn, assignment: written.update(assignment),
     )
     monkeypatch.setattr(
