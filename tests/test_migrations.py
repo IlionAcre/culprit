@@ -200,6 +200,7 @@ def test_migration_creates_pgvector_columns_at_384_dimensions():
             "FROM pg_attribute a "
             "JOIN pg_class c ON c.oid = a.attrelid "
             "WHERE a.attname IN ('task_embedding', 'card_embedding') "
+            "AND c.relkind = 'r' "
             "AND NOT a.attisdropped"
         ).fetchall()
 

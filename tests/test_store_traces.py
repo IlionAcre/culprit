@@ -309,7 +309,7 @@ def test_vector_384_round_trips_within_tight_tolerance(db_conn_fn):
         cur.execute("SELECT task_embedding FROM traces WHERE trace_id = %s", (run.trace.trace_id,))
         (stored,) = cur.fetchone()
 
-    assert list(stored) == pytest.approx(embedding, abs=1e-6)
+    assert stored.to_list() == pytest.approx(embedding, abs=1e-6)
 
 
 @requires_db

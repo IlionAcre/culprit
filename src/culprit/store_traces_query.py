@@ -35,7 +35,7 @@ def nearest_successful(conn_fn: ConnFn, embedding: list[float], k: int) -> list[
             """
             SELECT trace_id FROM traces
             WHERE outcome = %s AND task_embedding IS NOT NULL
-            ORDER BY task_embedding <=> %s
+            ORDER BY task_embedding <=> %s::vector
             LIMIT %s
             """,
             (Outcome.SUCCESS.value, embedding, k),
