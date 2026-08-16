@@ -554,6 +554,15 @@ receives an empty tool result and reports success anyway, the exact
 silent-failure pattern this product exists to catch. It does not need to
 match the other two fixtures' step sequence.
 
+## Known gotcha: `culprit worker` does not run on Windows
+
+`culprit worker` launches an RQ worker, and RQ forks the process with
+`os.fork`. That attribute does not exist on Windows, so the command fails with
+`AttributeError: module 'os' has no attribute 'fork'`. The worker path has not
+been verified; run it on Linux or WSL. The inline execution path used for the
+2026-08-16 e2e does not prove the worker, but it does prove the job functions
+against the real Postgres and Redis services.
+
 ## Guardrails - don't do these without asking first
 
 - Don't introduce `asyncio`/`async def` anywhere, including FastAPI routes.
@@ -672,17 +681,53 @@ operate purely on structured payload fields. Prompt realism cannot move a
 feature vector that never inspects prompts. The change still earns its place by
 unblocking `unused_retrieval` at L1, which does read message text.
 
-## What was never run
+## What was verified vs what remains unverified
 
-A reader must not be able to mistake this for a benchmarked system.
+A reader must not be able to mistake this for a benchmarked system. The
+unbenchmarked part is still true: no real TRAIL or Who&When scores exist.
 
-- **No live Postgres exists on this machine.** A container attempt failed on
-  host port forwarding, not on code. 18 tests and Alembic revision 0002 are
-  written but unexecuted.
-- **The benchmark harness has never scored a real dataset.** TRAIL and
-  Who&When are not available offline, so both adapters were built against
-  hand-written 3-record fixtures. `TRAIL_CATEGORY_MAP`'s keys are best-effort
-  guesses at TRAIL's taxonomy, flagged as such in `trail.py`.
+**Verified 2026-08-16 against live services:**
+
+- **Live Postgres with pgvector.** A podman container (`pgvector/pgvector:pg16`)
+  runs at the WSL VM IP `172.27.120.193:55432` (localhost port forwarding is
+  broken, a known podman-on-Windows quirk; the VM IP can change if the machine
+  is recreated). `CULPRIT_TEST_DSN=... uv run pytest -q` passes 524 tests, 0
+  failures. Offline run remains 506 passed, 18 skipped.
+- **Alembic revisions 0001 and 0002 applied live.** `alembic upgrade head`
+  ran against the `culprit` database, migration tests passed, and revision 0002's
+  HNSW indexes, partial-index `WHERE` clause, and `steps.actor`/`summary`
+  backfill + `NOT NULL` sequence are verified. Running against live Postgres
+  also found and fixed three real bugs in commit `6094f4f`: pgvector 0.5.0 type
+  adaptation (`%s::vector` cast needed in expression context), `Vector.to_list()`
+  for round trips, and migration-test counting of HNSW index attributes as
+  columns.
+- **Live LLM adjudication.** One real `litellm` call against
+  `gemini/gemini-2.5-flash-lite` on a synthetic trace with `empty_tool_result`
+  injected at step 3 parsed cleanly, identified step 3 /
+  `silent_empty_result_misread`, confidence 0.90, prompt_tokens=1594,
+  completion_tokens=187, cost_usd=0.0002342.
+- **CLI e2e against real services.** `alembic upgrade head`,
+  `culprit ingest tests/fixtures/otlp/otel_genai_sample.json` (trace
+  `a1b2c3d4e5f60718293a4b5c6d7e8f90`), diagnose, `culprit show`, and recluster
+  (1 cluster, 1 assignment). The fixture is a clean run and the pipeline
+  correctly abstained (step=None, abstained=True) rather than inventing a fault.
+  Redis 7 runs in a podman container at `172.27.120.193:56379`. Job functions
+  executed inline; the worker path was not verified.
+
+**Still unverified:**
+
+- **Benchmark harness has never scored a real TRAIL or Who&When dataset.** Both
+  adapters were built against hand-written 3-record fixtures. `TRAIL_CATEGORY_MAP`
+  keys are best-effort guesses at TRAIL's taxonomy, flagged as such in `trail.py`.
+- **Confidence coefficients remain hand-set priors.** Nothing has been fitted to
+  labeled data. Report Brier, ECE, and reliability points from `bench_score.py`,
+  but do not describe the system as calibrated.
+- **Failure path through the full CLI+DB pipeline.** A synthetic failure was
+  adjudicated in-process in the live smoke test, and the clean OTLP fixture ran
+  through the CLI, but a real failure trace has not yet been ingested,
+  diagnosed, persisted, and read back via `culprit show`.
+- **Queued-worker path.** See the known gotcha below: `culprit worker` cannot run
+  on Windows.
 
 ## Status
 
