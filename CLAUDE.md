@@ -581,6 +581,10 @@ match the other two fixtures' step sequence.
 - Don't discard raw span `attributes` during normalization, even for
   unrecognized vocabularies. Set `normalize_error` and keep the raw dict; a
   later vocabulary module depends on that data still being there.
+- Never read, print, or commit `.env`. It holds the local Gemini API key and
+  service DSNs, is gitignored, and is filled in by hand. Load it only with
+  `set -a && . ./.env && set +a` so values enter the environment without ever
+  appearing in agent context.
 
 ## Phase 1 workstream decisions (consolidated)
 
