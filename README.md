@@ -1,39 +1,53 @@
 # culprit
 
 ![Python](https://img.shields.io/badge/python-3.12%2B-blue)
+![License](https://img.shields.io/badge/license-custom-blue)
 
 **Not where it failed. Where it broke.**
 
-culprit ingests a failed LLM agent trace and identifies the step where the run
-left the space of trajectories that would have succeeded, plus the reason it
-did. Existing observability tools show the trace; culprit finds the cause.
+Observability shows you the trace. culprit finds the step that caused the failure - the point where the run left the space of trajectories that would have succeeded.
 
-## Status
+Long-context models do badly when you hand them an entire trace and ask what went wrong. culprit does not do that. It narrows deterministically, then spends a small model budget adjudicating a handful of pre-narrowed candidates.
 
-Pipeline is wired end to end: ingestion (L0), deterministic detectors (L1),
-contrastive trajectory alignment (L2), targeted LLM adjudication (L3), and
-clustering (L5), plus the service surface (CLI, queue, jobs).
+## How it works
 
-Tested: 506 offline tests pass, 524 pass against a live Postgres+pgvector
-instance. One live adjudication call verified against `gemini/gemini-2.5-flash-lite`
-with token counts and cost populated. CLI e2e verified against live Postgres and
-Redis on a clean OTLP fixture: the pipeline correctly abstained instead of
-inventing a fault.
+L0 normalize/linearize   - OTLP GenAI semconv, OpenInference, or raw JSON
+       ↓
+L1 deterministic detect  - 21-class failure taxonomy
+       ↓
+L2 contrastive diff      - pgvector reference runs, top candidates
+       ↓
+L3 targeted adjudication - ~5 candidates via litellm, any provider
+       ↓
+L5 batch clustering      - recurring failure modes surface
 
-Still not benchmarked: no real TRAIL or Who&When scores exist. Confidence
-coefficients are hand-set priors, not fitted to labeled data. The RQ worker
-path is unverified on Windows because RQ calls `os.fork`.
+## Seen it work
+
+- Injected fault: a synth trace with an `empty_tool_result` fault was diagnosed as step 3, `silent_empty_result_misread`, confidence 0.90. One call to `gemini/gemini-2.5-flash-lite`, $0.00023.
+- Clean trace: the pipeline abstained rather than invent a fault.
+
+Offline: 506 tests pass. With live Postgres + pgvector: 524 tests pass. CLI e2e (migrate, ingest, diagnose, show, recluster) verified against real Postgres and Redis.
+
+## Cost
+
+About 40k input + 2.5k output tokens per diagnosis. On a Flash-Lite tier that is roughly $0.005 per diagnosis, or about $5 per 1,000 diagnoses/month. The naive one-long-call baseline costs roughly 4x more and performs worse. Every adjudication row stores prompt/completion tokens and cost so the claim is provable.
+
+## Not yet
+
+- No TRAIL / Who&When / MAST / AgenTracer benchmark scores yet; harness and adapters exist, datasets were unavailable offline.
+- L2 contrastive top-1 is 40% against an 80% aspiration - recorded openly.
+- Confidence coefficients are unfitted hand-set priors.
+- `culprit worker` needs Linux or WSL because RQ uses `os.fork`; it does not run on Windows.
 
 ## Quickstart
 
+Offline:
 ```bash
 uv sync --all-groups
 uv run pytest -q
 ```
 
-With live services, create a `.env` (gitignored) containing
-`GEMINI_API_KEY`, `CULPRIT_DATABASE_URL`, `CULPRIT_REDIS_URL`, and optionally
-`CULPRIT_TEST_DSN`. Load it before each command:
+With services, create a gitignored `.env` with `GEMINI_API_KEY`, `CULPRIT_DATABASE_URL`, `CULPRIT_REDIS_URL`, and optionally `CULPRIT_TEST_DSN`. Load it before each command:
 
 ```bash
 set -a && . ./.env && set +a
@@ -44,6 +58,7 @@ uv run culprit show a1b2c3d4e5f60718293a4b5c6d7e8f90
 uv run culprit recluster
 ```
 
-`culprit worker` is the queue worker entrypoint; it needs Linux or WSL because
-RQ forks the process. See `CLAUDE.md` for the full decision log and
-`AI_docs/PHASES.md` for the execution roadmap.
+## Where the thinking lives
+
+- `CLAUDE.md` - full decision log, every architectural choice with rationale and rejected alternatives.
+- `AI_docs/PHASES.md` - roadmap and execution status.

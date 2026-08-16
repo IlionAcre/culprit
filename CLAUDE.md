@@ -519,6 +519,10 @@ dev environment's Rust/linker setup changes, or a future `litellm` release
 ships Windows wheels again; don't collapse this back to one unconditional
 pin.
 
+## Known gotcha: `.env` silently turns on Postgres-gated tests
+
+`src/culprit/cli.py` calls `load_dotenv()` at import, so any variable in a `.env` file is present before pytest collects tests. If `.env` sets `CULPRIT_TEST_DSN`, a plain `uv run pytest -q` runs the 18 database-gated tests instead of skipping them. With services up this is why the suite reports 524 passes; if the Postgres container is stopped, the same command fails instead of skipping. Either keep `.env` unset when you want the offline-only run, or run `unset CULPRIT_TEST_DSN` before pytest.
+
 ## Known gotcha: OTLP JSON encodes int64 fields and timestamps as strings
 
 `tests/fixtures/otlp/otel_genai_sample.json` and `openinference_sample.json`
