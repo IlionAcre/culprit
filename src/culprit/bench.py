@@ -24,7 +24,9 @@ when L2 fails for real, not through a special-case branch.
 """
 
 import logging
+import os
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,7 +34,7 @@ from culprit import pipeline as pipeline_mod
 from culprit.bench_score import BenchReport, CaseResult, layer_ablation_delta, score
 from culprit.benchmarks.base import BenchmarkCase
 from culprit.benchmarks.registry import BENCHMARKS
-from culprit.db import ConnFn
+from culprit.db import ConnFn, make_pool
 from culprit.embed import EmbedFn
 from culprit.llm import CallFn
 from culprit.logging_config import LOGGER_NAME
@@ -40,6 +42,54 @@ from culprit.signals import ContrastResult, Diagnosis
 from culprit.store_traces import write_trace
 
 logger = logging.getLogger(LOGGER_NAME)
+
+DEFAULT_DATABASE_URL = "postgresql://localhost:5432/culprit"
+
+
+def pooled_conn_fn(dsn: str | None = None) -> tuple[ConnFn, Callable[[], None], Callable[[], None]]:
+    """Build `(conn_fn, recycle, close)` over one pool for a long bench run.
+
+    Every store-layer function checks a connection OUT via `conn_fn()` and
+    never returns it - the documented contract is "callers own pooling"
+    (store_traces.py), which makes the caller responsible for the lifecycle.
+    With a bare `pool.getconn` the bench run exhausts a 10-connection pool
+    within a few traces (found empirically in the first TRAIL run: every
+    trace after the third failed with "couldn't get a connection after
+    30.00 sec"). `recycle()` closes every connection issued since the last
+    call, returning it to the pool; `run_benchmark` calls it after each
+    trace, once all of that trace's reads and writes are finished. The pool
+    is sized above one trace's worst case (write + read + `nearest_successful`
+    + `contrast.MAX_REFERENCES` reference loads = ~28 checkouts), so no
+    single trace can exhaust it between recycles.
+
+    `recycle()` must use `pool.putconn`, NOT `conn.close()`: with this
+    psycopg_pool version, closing a connection obtained via `pool.getconn`
+    does not return it to the pool (verified empirically - the pool keeps
+    counting it as checked out), it just kills the connection while the
+    pool still blocks at max_size."""
+    pool = make_pool(dsn or os.environ.get("CULPRIT_DATABASE_URL", DEFAULT_DATABASE_URL), max_size=32)
+    pool.open()
+    issued: list = []
+
+    def conn_fn():
+        conn = pool.getconn()
+        # Read queries otherwise leave the connection INTRANS, which makes
+        # putconn roll back noisily on recycle; explicit `with
+        # conn.transaction():` write blocks are unaffected by autocommit.
+        conn.autocommit = True
+        issued.append(conn)
+        return conn
+
+    def recycle() -> None:
+        for conn in issued:
+            pool.putconn(conn)
+        issued.clear()
+
+    def close() -> None:
+        recycle()
+        pool.close()
+
+    return conn_fn, recycle, close
 
 
 @dataclass
@@ -112,11 +162,14 @@ def run_benchmark(
     call_fn: CallFn,
     embed_fn: EmbedFn,
     model: str,
+    recycle_fn: Callable[[], None] | None = None,
 ) -> BenchRun:
     """Score `benchmark` (a `BENCHMARKS` registry key) from the merged JSON
     file at `data`. Per-trace isolation: a trace whose pipeline run raises
     contributes abstained rows for all its cases and is named in
-    `per_trace_errors`, never aborts the run."""
+    `per_trace_errors`, never aborts the run. `recycle_fn`, when given, is
+    called once after each trace so a pool-backed `conn_fn` can reclaim the
+    connections that trace checked out (see `pooled_conn_fn`)."""
     if benchmark not in BENCHMARKS:
         raise ValueError(f"unknown benchmark {benchmark!r}; known: {sorted(BENCHMARKS)}")
     if ablate not in (None, "l2"):
@@ -151,6 +204,8 @@ def run_benchmark(
                 per_trace_errors[trace_id] = str(e)
                 diagnosis = None
             results.extend(_case_results(own, diagnosis))
+            if recycle_fn is not None:
+                recycle_fn()
             logger.info(
                 "benchmark trace scored",
                 extra={"event": "bench_trace_scored", "trace_id": trace_id,

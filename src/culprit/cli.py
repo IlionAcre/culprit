@@ -146,16 +146,20 @@ def bench(
     each benchmark trace through the production tables, diagnose inline (no
     RQ worker, which cannot run on Windows), and print the scored report -
     every tolerance band, never only the flattering one."""
-    from culprit.bench import run_benchmark
+    from culprit.bench import pooled_conn_fn, run_benchmark
     from culprit.embed import embed_texts
-    from culprit.jobs import _conn_fn_from_env
     from culprit.llm import litellm_call
 
-    run = run_benchmark(
-        benchmark, data, sample=sample, ablate=ablate,
-        conn_fn=_conn_fn_from_env(), call_fn=litellm_call, embed_fn=embed_texts,
-        model=os.environ.get("CULPRIT_MODEL", CONFIG.model),
-    )
+    conn_fn, recycle, close = pooled_conn_fn()
+    try:
+        run = run_benchmark(
+            benchmark, data, sample=sample, ablate=ablate,
+            conn_fn=conn_fn, call_fn=litellm_call, embed_fn=embed_texts,
+            model=os.environ.get("CULPRIT_MODEL", CONFIG.model),
+            recycle_fn=recycle,
+        )
+    finally:
+        close()
     for label, report in (("all annotated errors", run.report_all), ("earliest error only", run.report_primary)):
         typer.echo(f"== {label} (n_cases={report.n_cases}, traces={run.n_traces}) ==")
         typer.echo(f"  abstention_rate={report.abstention_rate:.3f}")
