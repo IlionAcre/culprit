@@ -13,4 +13,8 @@ def test_every_registered_adapter_loads_its_own_3_record_sample_fixture():
     for name, load_cases in BENCHMARKS.items():
         fixture = _FIXTURES / f"{name}_sample.json"
         cases = load_cases(fixture)
-        assert len(cases) == 3, f"{name} sample fixture should yield 3 cases"
+        # 3 records per fixture; a record with multiple annotated errors
+        # legitimately yields more than one case (see trail.py).
+        assert len({c.trace.trace_id for c in cases}) == 3, (
+            f"{name} sample fixture should convert all 3 records"
+        )

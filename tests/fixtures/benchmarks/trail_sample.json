@@ -1,53 +1,76 @@
 [
   {
     "trace_id": "trail-001",
-    "resourceSpans": [
+    "split": "GAIA",
+    "spans": [
       {
-        "scopeSpans": [
+        "timestamp": "2025-03-19T16:32:08.000000Z",
+        "trace_id": "trail-001",
+        "span_id": "aa00000000000001",
+        "parent_span_id": null,
+        "span_name": "main",
+        "span_kind": "Internal",
+        "duration": "PT10S",
+        "status_code": "Ok",
+        "status_message": "",
+        "span_attributes": {},
+        "child_spans": [
           {
-            "spans": [
+            "timestamp": "2025-03-19T16:32:08.500000Z",
+            "trace_id": "trail-001",
+            "span_id": "aa00000000000002",
+            "parent_span_id": "aa00000000000001",
+            "span_name": "CodeAgent.run",
+            "span_kind": "Internal",
+            "duration": "PT8S",
+            "status_code": "Ok",
+            "status_message": "",
+            "span_attributes": {
+              "openinference.span.kind": "AGENT",
+              "input.value": "Find the order status",
+              "output.value": "The order shipped"
+            },
+            "child_spans": [
               {
-                "traceId": "trail001000000000000000000000001",
-                "spanId": "tr001a1",
-                "name": "invoke_agent order_agent",
-                "startTimeUnixNano": "1755000000000000000",
-                "endTimeUnixNano": "1755000002000000000",
-                "attributes": [
-                  {"key": "gen_ai.operation.name", "value": {"stringValue": "invoke_agent"}},
-                  {"key": "gen_ai.agent.name", "value": {"stringValue": "order_agent"}}
-                ],
-                "status": {"code": "STATUS_CODE_OK"}
+                "timestamp": "2025-03-19T16:32:09.000000Z",
+                "trace_id": "trail-001",
+                "span_id": "aa00000000000003",
+                "parent_span_id": "aa00000000000002",
+                "span_name": "LiteLLMModel.__call__",
+                "span_kind": "Internal",
+                "duration": "PT2S",
+                "status_code": "Ok",
+                "status_message": "",
+                "span_attributes": {
+                  "openinference.span.kind": "LLM",
+                  "llm.model_name": "o3-mini",
+                  "llm.input_messages.0.message.role": "user",
+                  "llm.input_messages.0.message.content": "Find the order status",
+                  "llm.output_messages.0.message.role": "assistant",
+                  "llm.output_messages.0.message.content": "I will call web_search",
+                  "llm.token_count.prompt": 120,
+                  "llm.token_count.completion": 30,
+                  "llm.token_count.total": 150
+                },
+                "child_spans": []
               },
               {
-                "traceId": "trail001000000000000000000000001",
-                "spanId": "tr001a2",
-                "parentSpanId": "tr001a1",
-                "name": "chat gpt-4o-mini",
-                "startTimeUnixNano": "1755000000010000000",
-                "endTimeUnixNano": "1755000000400000000",
-                "attributes": [
-                  {"key": "gen_ai.operation.name", "value": {"stringValue": "chat"}},
-                  {"key": "gen_ai.provider.name", "value": {"stringValue": "openai"}},
-                  {"key": "gen_ai.request.model", "value": {"stringValue": "gpt-4o-mini"}},
-                  {"key": "gen_ai.output.messages", "value": {"stringValue": "[{\"role\": \"assistant\", \"tool_calls\": [{\"id\": \"call_1\", \"type\": \"function\", \"function\": {\"name\": \"send_email\", \"arguments\": \"{}\"}}]}]"}}
-                ],
-                "status": {"code": "STATUS_CODE_OK"}
-              },
-              {
-                "traceId": "trail001000000000000000000000001",
-                "spanId": "tr001a3",
-                "parentSpanId": "tr001a1",
-                "name": "execute_tool send_email",
-                "startTimeUnixNano": "1755000000410000000",
-                "endTimeUnixNano": "1755000000600000000",
-                "attributes": [
-                  {"key": "gen_ai.operation.name", "value": {"stringValue": "execute_tool"}},
-                  {"key": "gen_ai.tool.name", "value": {"stringValue": "send_email"}},
-                  {"key": "gen_ai.tool.call.id", "value": {"stringValue": "call_1"}},
-                  {"key": "gen_ai.tool.call.arguments", "value": {"stringValue": "{}"}},
-                  {"key": "gen_ai.tool.call.result", "value": {"stringValue": "sent to wrong recipient"}}
-                ],
-                "status": {"code": "STATUS_CODE_OK"}
+                "timestamp": "2025-03-19T16:32:11.500000Z",
+                "trace_id": "trail-001",
+                "span_id": "aa00000000000004",
+                "parent_span_id": "aa00000000000002",
+                "span_name": "web_search",
+                "span_kind": "Internal",
+                "duration": "PT1S",
+                "status_code": "Ok",
+                "status_message": "",
+                "span_attributes": {
+                  "openinference.span.kind": "TOOL",
+                  "tool.name": "web_search",
+                  "input.value": "{\"query\": \"order 1234\"}",
+                  "output.value": "no results"
+                },
+                "child_spans": []
               }
             ]
           }
@@ -55,116 +78,144 @@
       }
     ],
     "errors": [
-      {"span_id": "tr001a3", "category": "wrong_tool_call", "description": "send_email was called instead of check_order_status"}
+      {
+        "category": "Tool Selection Errors",
+        "location": "aa00000000000004",
+        "evidence": "web_search was called instead of check_order_status",
+        "description": "The system called web_search when check_order_status was the suitable tool.",
+        "impact": "HIGH"
+      }
     ]
   },
   {
     "trace_id": "trail-002",
-    "resourceSpans": [
+    "split": "SWE Bench",
+    "spans": [
       {
-        "scopeSpans": [
+        "timestamp": "2025-03-19T16:40:00.000000Z",
+        "trace_id": "trail-002",
+        "span_id": "bb00000000000001",
+        "parent_span_id": null,
+        "span_name": "process_item",
+        "span_kind": "Internal",
+        "duration": "PT6S",
+        "status_code": "Unset",
+        "status_message": "",
+        "span_attributes": {},
+        "child_spans": [
           {
-            "spans": [
-              {
-                "traceId": "trail002000000000000000000000002",
-                "spanId": "tr002a1",
-                "name": "invoke_agent refund_agent",
-                "startTimeUnixNano": "1755000100000000000",
-                "endTimeUnixNano": "1755000102000000000",
-                "attributes": [
-                  {"key": "gen_ai.operation.name", "value": {"stringValue": "invoke_agent"}},
-                  {"key": "gen_ai.agent.name", "value": {"stringValue": "refund_agent"}}
-                ],
-                "status": {"code": "STATUS_CODE_OK"}
-              },
-              {
-                "traceId": "trail002000000000000000000000002",
-                "spanId": "tr002a2",
-                "parentSpanId": "tr002a1",
-                "name": "chat gpt-4o-mini",
-                "startTimeUnixNano": "1755000100010000000",
-                "endTimeUnixNano": "1755000100400000000",
-                "attributes": [
-                  {"key": "gen_ai.operation.name", "value": {"stringValue": "chat"}},
-                  {"key": "gen_ai.provider.name", "value": {"stringValue": "openai"}},
-                  {"key": "gen_ai.request.model", "value": {"stringValue": "gpt-4o-mini"}},
-                  {"key": "gen_ai.output.messages", "value": {"stringValue": "[{\"role\": \"assistant\", \"tool_calls\": [{\"id\": \"call_2\", \"type\": \"function\", \"function\": {\"name\": \"process_refund\", \"arguments\": \"{\\\"order_id\\\": null}\"}}]}]"}}
-                ],
-                "status": {"code": "STATUS_CODE_OK"}
-              },
-              {
-                "traceId": "trail002000000000000000000000002",
-                "spanId": "tr002a3",
-                "parentSpanId": "tr002a1",
-                "name": "execute_tool process_refund",
-                "startTimeUnixNano": "1755000100410000000",
-                "endTimeUnixNano": "1755000100600000000",
-                "attributes": [
-                  {"key": "gen_ai.operation.name", "value": {"stringValue": "execute_tool"}},
-                  {"key": "gen_ai.tool.name", "value": {"stringValue": "process_refund"}},
-                  {"key": "gen_ai.tool.call.id", "value": {"stringValue": "call_2"}},
-                  {"key": "gen_ai.tool.call.arguments", "value": {"stringValue": "{\"order_id\": null}"}},
-                  {"key": "gen_ai.tool.call.result", "value": {"stringValue": ""}}
-                ],
-                "status": {"code": "STATUS_CODE_ERROR"},
-                "status_message": "order_id must not be null"
-              }
-            ]
+            "timestamp": "2025-03-19T16:40:01.000000Z",
+            "trace_id": "trail-002",
+            "span_id": "bb00000000000002",
+            "parent_span_id": "bb00000000000001",
+            "span_name": "LiteLLMModel.__call__",
+            "span_kind": "Internal",
+            "duration": "PT4S",
+            "status_code": "Ok",
+            "status_message": "",
+            "span_attributes": {
+              "openinference.span.kind": "LLM",
+              "llm.model_name": "o3-mini",
+              "llm.input_messages.0.message.role": "user",
+              "llm.input_messages.0.message.content": "Fix the bug",
+              "llm.output_messages.0.message.role": "assistant",
+              "llm.output_messages.0.message.content": "page_down({\"\": \"\"})",
+              "llm.token_count.prompt": 80,
+              "llm.token_count.completion": 20,
+              "llm.token_count.total": 100
+            },
+            "child_spans": []
           }
         ]
       }
     ],
     "errors": [
-      {"span_id": "tr002a2", "category": "incorrect_tool_parameters", "description": "order_id was passed as null"}
+      {
+        "category": "Formatting Errors",
+        "location": "bb00000000000002",
+        "evidence": "page_down was called with an incorrect dictionary structure",
+        "description": "The page_down tool takes no arguments but was called with unexpected keyword arguments.",
+        "impact": "MEDIUM"
+      }
     ]
   },
   {
     "trace_id": "trail-003",
-    "resourceSpans": [
+    "split": "GAIA",
+    "spans": [
       {
-        "scopeSpans": [
+        "timestamp": "2025-03-19T16:50:00.000000Z",
+        "trace_id": "trail-003",
+        "span_id": "cc00000000000001",
+        "parent_span_id": null,
+        "span_name": "main",
+        "span_kind": "Internal",
+        "duration": "PT12S",
+        "status_code": "Ok",
+        "status_message": "",
+        "span_attributes": {},
+        "child_spans": [
           {
-            "spans": [
+            "timestamp": "2025-03-19T16:50:01.000000Z",
+            "trace_id": "trail-003",
+            "span_id": "cc00000000000002",
+            "parent_span_id": "cc00000000000001",
+            "span_name": "CodeAgent.run",
+            "span_kind": "Internal",
+            "duration": "PT10S",
+            "status_code": "Ok",
+            "status_message": "",
+            "span_attributes": {
+              "openinference.span.kind": "AGENT",
+              "input.value": "Translate the report",
+              "output.value": "done"
+            },
+            "child_spans": [
               {
-                "traceId": "trail003000000000000000000000003",
-                "spanId": "tr003a1",
-                "name": "invoke_agent policy_agent",
-                "startTimeUnixNano": "1755000200000000000",
-                "endTimeUnixNano": "1755000202000000000",
-                "attributes": [
-                  {"key": "gen_ai.operation.name", "value": {"stringValue": "invoke_agent"}},
-                  {"key": "gen_ai.agent.name", "value": {"stringValue": "policy_agent"}}
-                ],
-                "status": {"code": "STATUS_CODE_OK"}
+                "timestamp": "2025-03-19T16:50:02.000000Z",
+                "trace_id": "trail-003",
+                "span_id": "cc00000000000003",
+                "parent_span_id": "cc00000000000002",
+                "span_name": "LiteLLMModel.__call__",
+                "span_kind": "Internal",
+                "duration": "PT3S",
+                "status_code": "Ok",
+                "status_message": "",
+                "span_attributes": {
+                  "openinference.span.kind": "LLM",
+                  "llm.model_name": "o3-mini",
+                  "llm.input_messages.0.message.role": "user",
+                  "llm.input_messages.0.message.content": "Plan first",
+                  "llm.output_messages.0.message.role": "assistant",
+                  "llm.output_messages.0.message.content": "1. search 2. translate",
+                  "llm.token_count.prompt": 50,
+                  "llm.token_count.completion": 10,
+                  "llm.token_count.total": 60
+                },
+                "child_spans": []
               },
               {
-                "traceId": "trail003000000000000000000000003",
-                "spanId": "tr003a2",
-                "parentSpanId": "tr003a1",
-                "name": "chat gpt-4o-mini",
-                "startTimeUnixNano": "1755000200010000000",
-                "endTimeUnixNano": "1755000200400000000",
-                "attributes": [
-                  {"key": "gen_ai.operation.name", "value": {"stringValue": "chat"}},
-                  {"key": "gen_ai.provider.name", "value": {"stringValue": "openai"}},
-                  {"key": "gen_ai.request.model", "value": {"stringValue": "gpt-4o-mini"}}
-                ],
-                "status": {"code": "STATUS_CODE_OK"}
-              },
-              {
-                "traceId": "trail003000000000000000000000003",
-                "spanId": "tr003a3",
-                "parentSpanId": "tr003a1",
-                "name": "retrieve_documents policy_lookup",
-                "startTimeUnixNano": "1755000200410000000",
-                "endTimeUnixNano": "1755000200600000000",
-                "attributes": [
-                  {"key": "gen_ai.operation.name", "value": {"stringValue": "retrieve_documents"}},
-                  {"key": "gen_ai.retrieval.query", "value": {"stringValue": "return policy for electronics"}},
-                  {"key": "gen_ai.retrieval.documents", "value": {"stringValue": "[]"}},
-                  {"key": "gen_ai.retrieval.document.count", "value": {"intValue": "0"}}
-                ],
-                "status": {"code": "STATUS_CODE_OK"}
+                "timestamp": "2025-03-19T16:50:06.000000Z",
+                "trace_id": "trail-003",
+                "span_id": "cc00000000000004",
+                "parent_span_id": "cc00000000000002",
+                "span_name": "LiteLLMModel.__call__",
+                "span_kind": "Internal",
+                "duration": "PT2S",
+                "status_code": "Ok",
+                "status_message": "",
+                "span_attributes": {
+                  "openinference.span.kind": "LLM",
+                  "llm.model_name": "o3-mini",
+                  "llm.input_messages.0.message.role": "user",
+                  "llm.input_messages.0.message.content": "Now act",
+                  "llm.output_messages.0.message.role": "assistant",
+                  "llm.output_messages.0.message.content": "final_answer(42)",
+                  "llm.token_count.prompt": 60,
+                  "llm.token_count.completion": 12,
+                  "llm.token_count.total": 72
+                },
+                "child_spans": []
               }
             ]
           }
@@ -172,7 +223,20 @@
       }
     ],
     "errors": [
-      {"span_id": "tr003a3", "category": "some_future_trail_category_not_yet_mapped", "description": "retrieval returned nothing and the agent proceeded anyway"}
+      {
+        "category": " Goal deviation ",
+        "location": "cc00000000000004",
+        "evidence": "jumped directly to final_answer, skipping the planned search step",
+        "description": "The system deviated from the plan it generated in the previous step.",
+        "impact": "HIGH"
+      },
+      {
+        "category": "Quantum Entanglement",
+        "location": "cc00000000000004",
+        "evidence": "not a real TRAIL category",
+        "description": "Fixture-only category exercising the unmapped-category warning path.",
+        "impact": "LOW"
+      }
     ]
   }
 ]

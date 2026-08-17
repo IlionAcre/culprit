@@ -134,6 +134,53 @@ def recluster() -> None:
 
 
 @app.command()
+def bench(
+    benchmark: str = typer.Argument(..., help="Benchmark name: trail or who_and_when"),
+    data: Path = typer.Option(..., "--data", help="Merged benchmark JSON file"),
+    sample: int | None = typer.Option(
+        None, "--sample", help="Score only N evenly-spaced traces (deterministic)"
+    ),
+    ablate: str | None = typer.Option(None, "--ablate", help="Disable a layer: l2"),
+) -> None:
+    """Run the benchmark harness end to end (Integration task I5): persist
+    each benchmark trace through the production tables, diagnose inline (no
+    RQ worker, which cannot run on Windows), and print the scored report -
+    every tolerance band, never only the flattering one."""
+    from culprit.bench import run_benchmark
+    from culprit.embed import embed_texts
+    from culprit.jobs import _conn_fn_from_env
+    from culprit.llm import litellm_call
+
+    run = run_benchmark(
+        benchmark, data, sample=sample, ablate=ablate,
+        conn_fn=_conn_fn_from_env(), call_fn=litellm_call, embed_fn=embed_texts,
+        model=os.environ.get("CULPRIT_MODEL", CONFIG.model),
+    )
+    for label, report in (("all annotated errors", run.report_all), ("earliest error only", run.report_primary)):
+        typer.echo(f"== {label} (n_cases={report.n_cases}, traces={run.n_traces}) ==")
+        typer.echo(f"  abstention_rate={report.abstention_rate:.3f}")
+        typer.echo(f"  exact_accuracy={report.exact_accuracy:.3f}  joint_accuracy={report.joint_accuracy:.3f}")
+        bands = "  ".join(f"@{k}={v:.3f}" for k, v in sorted(report.tolerance_accuracy.items()))
+        typer.echo(f"  tolerance_accuracy: {bands}")
+        typer.echo(
+            f"  class_accuracy={report.class_accuracy if report.class_accuracy is None else f'{report.class_accuracy:.3f}'}"
+            f"  span_accuracy={report.span_accuracy if report.span_accuracy is None else f'{report.span_accuracy:.3f}'}"
+        )
+        typer.echo(f"  earliness_error={report.earliness_error:.3f}")
+        recall = "  ".join(f"@{k}={v:.3f}" for k, v in sorted(report.candidate_recall_at_k.items()))
+        typer.echo(f"  candidate_recall: {recall}")
+        typer.echo(
+            f"  brier={report.brier_score if report.brier_score is None else f'{report.brier_score:.3f}'}"
+            f"  ece={report.ece if report.ece is None else f'{report.ece:.3f}'}"
+        )
+    typer.echo(f"total LLM cost: ${run.total_cost_usd:.4f}")
+    if run.per_trace_errors:
+        typer.echo(f"traces failed (scored as abstained): {len(run.per_trace_errors)}")
+        for trace_id, error in run.per_trace_errors.items():
+            typer.echo(f"  {trace_id}: {error}")
+
+
+@app.command()
 def serve(
     host: str = typer.Option("0.0.0.0", "--host"),
     port: int = typer.Option(8000, "--port"),
