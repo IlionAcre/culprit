@@ -339,6 +339,26 @@ problem as detecting an anomalous step sequence in an agent trace.
   describe anything in this system as calibrated; claiming calibration that
   has not been measured is exactly the unearned claim the Litmus decision
   log calls out repeatedly, and culprit does not repeat that mistake.
+  - **A fit was attempted 2026-08-17 (I7) against I5's scored TRAIL/Who&When
+    cases and found there is nothing to fit against: the I5 benchmark path
+    never persisted the data it would require.** `bench.py::run_benchmark`
+    calls `pipeline.diagnose` directly and only ever persists the trace
+    itself via `write_trace`; `pipeline.diagnose`'s own docstring says
+    plainly it "does not persist" and names `jobs.diagnose_trace_job` as the
+    caller responsible for `store_diagnoses.write_diagnosis` - a path the
+    `culprit bench` CLI command never goes through. `benchmark_cases` has no
+    writer anywhere in the codebase either. Querying the live Postgres
+    instance confirmed this empirically: `diagnoses`, `adjudications`,
+    `signals`, `divergences`, and `benchmark_cases` all read back 0 rows;
+    `traces` holds exactly 1 row (`source='synth'`, unrelated to I5). The 763
+    TRAIL / 184 Who&When scored cases and their `calibrated_confidence`
+    values exist only as the in-memory `BenchReport` I5 printed and copied
+    into this file - never as rows a later session could join and fit
+    against. Coefficients remain the original hand-set priors (`DEFAULT_A0`
+    through `DEFAULT_A4`); no fit was performed, degenerate or otherwise,
+    because there was no data to fit. Making `culprit bench` call
+    `write_diagnosis` per trace is the real prerequisite for I7, not a
+    logistic-regression change.
   - The cite-check term (fraction of `cited_step_indices` actually present
     in the context packet) is the highest-value term in the formula: a
     rationale citing step 47 when only 12-16 were shown is direct evidence
