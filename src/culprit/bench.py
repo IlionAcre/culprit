@@ -6,11 +6,16 @@ itself fell to Integration task I5.
 Flow per benchmark trace: `benchmarks/<name>.load_cases` produces canonical
 `BenchmarkCase`s, each trace is persisted through `store_traces.write_trace`
 (the same table production traffic lands in, `source='benchmark:<name>'`,
-upsert so re-runs are idempotent), then `pipeline.diagnose` runs **inline** -
-no RQ, because the worker cannot run on Windows (RQ calls `os.fork`, see
-PHASES.md) and the bench path must work on this development machine. The
-resulting `Diagnosis` is paired with every case of its trace into
-`bench_score.CaseResult`s and scored.
+upsert so re-runs are idempotent), its cases are persisted through
+`store_benchmarks.write_benchmark_cases`, then `pipeline.diagnose` runs
+**inline** - no RQ, because the worker cannot run on Windows (RQ calls
+`os.fork`, see PHASES.md) and the bench path must work on this development
+machine. The resulting `Diagnosis` is persisted through
+`store_diagnoses.write_diagnosis` (Integration task I7: `culprit bench`
+previously only ever wrote the trace, never the diagnosis or the ground-truth
+cases, so a benchmark run left nothing in Postgres for a later calibration
+fit to join against - see CLAUDE.md's "L3 adjudication" section) and paired
+with every case of its trace into `bench_score.CaseResult`s and scored.
 
 **`--ablate l2` replaces `pipeline.contrast` with a stub that abstains**
 (`abstain_reason="ablated:l2"`), which is exactly the "L2 contributed
@@ -39,6 +44,8 @@ from culprit.embed import EmbedFn
 from culprit.llm import CallFn
 from culprit.logging_config import LOGGER_NAME
 from culprit.signals import ContrastResult, Diagnosis
+from culprit.store_benchmarks import write_benchmark_cases
+from culprit.store_diagnoses import write_diagnosis
 from culprit.store_traces import write_trace
 
 logger = logging.getLogger(LOGGER_NAME)
@@ -192,9 +199,11 @@ def run_benchmark(
             try:
                 case0 = own[0]
                 write_trace(conn_fn, case0.trace, case0.spans, case0.steps)
+                write_benchmark_cases(conn_fn, benchmark, own)
                 diagnosis = pipeline_mod.diagnose(
                     case0.trace, conn_fn=conn_fn, call_fn=call_fn, embed_fn=embed_fn, model=model,
                 )
+                write_diagnosis(conn_fn, diagnosis)
                 total_cost += sum(a.cost_usd or 0.0 for a in diagnosis.adjudications)
             except Exception as e:  # noqa: BLE001 - per-trace isolation, see docstring
                 logger.warning(
