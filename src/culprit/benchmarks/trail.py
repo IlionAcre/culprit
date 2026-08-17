@@ -199,7 +199,22 @@ def _cases_from_record(record: dict) -> list[BenchmarkCase]:
     raw_spans: list[dict] = []
     for root in record["spans"]:
         _flatten(root, raw_spans)
-    spans = [normalize_span(raw, friendly_trace_id) for raw in raw_spans]
+    # One released trace (SWE Bench 72822db6...) emits the same span twice
+    # (identical span_id, name, timestamp, parent), which violates the
+    # (trace_id, span_id) primary key at write time; keep the first
+    # occurrence and drop exact-id re-emissions.
+    seen_ids: set[str] = set()
+    deduped: list[dict] = []
+    for raw in raw_spans:
+        if raw["span_id"] in seen_ids:
+            logger.warning(
+                "duplicate span id in TRAIL trace, keeping first occurrence",
+                extra={"event": "trail_duplicate_span", "trace_id": external_id, "span_id": raw["span_id"]},
+            )
+            continue
+        seen_ids.add(raw["span_id"])
+        deduped.append(raw)
+    spans = [normalize_span(raw, friendly_trace_id) for raw in deduped]
     steps = linearize(spans)
     trace = _trace_from(friendly_trace_id, spans, steps, external_id)
 
