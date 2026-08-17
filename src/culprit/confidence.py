@@ -1,18 +1,20 @@
 """Confidence calibration and trace-level abstention for L3 adjudication.
 
-**The five coefficients below (a0-a4) are HAND-SET PRIORS, not fitted
-values.** No labeled ground truth exists yet to fit them against;
-`bench_score.py` (WS-H) is what will eventually let them be refit by
-logistic regression once labeled diagnoses exist. Calling this "calibrated"
-today would be exactly the unearned claim this project's own decision log
-warns against - it is a documented starting guess wired into the one place
-that will make it measurable, not a claim of accuracy.
+**The five coefficients below (a0-a4) were fitted 2026-08-17 (Integration
+task I7) by logistic regression against 447 real adjudication rows** from
+the TRAIL/Who&When benchmark re-run (`bench.py` now persists diagnoses and
+`benchmark_cases`; see CLAUDE.md's "L3 adjudication" section for the full
+before/after numbers and how the fit was validated). They replace the
+original hand-set priors (`a0=0.0, a1=1.0, a2=0.5, a3=0.3, a4=1.5`, kept
+below in a comment for reference) now that real labeled data exists.
 
-`cite_check` is the highest-value term in the formula (CLAUDE.md's "L3
-adjudication" section): a rationale citing step 47 when only steps 12-16
-were shown is direct, cheap evidence of confabulation, not a benign
-paraphrase, and `a4` is deliberately the largest-magnitude coefficient so it
-actually moves the number.
+`cite_check`'s coefficient (`a4`) came back near zero in the fit
+(0.0053) - the opposite of the hand-set prior's assumption that it would be
+the dominant term. `a1` (the model's own raw self-reported confidence) also
+came back near zero (and slightly negative), consistent with CLAUDE.md's
+measured finding that raw model confidence saturates near 1.0 regardless of
+actual correctness. `a2` (prior, i.e. detector severity) and `a3` (L1
+agreement) turned out to carry nearly all the real predictive signal.
 
 `select_diagnosis` implements the plan's three independent abstention
 gates. Uber's "Project RADAR" is the citation CLAUDE.md records for this
@@ -25,12 +27,16 @@ from dataclasses import dataclass
 from culprit.signals import Adjudication
 
 # a0 intercept, a1 logit(model_conf), a2 prior, a3 agreement, a4 evidence
-# density. See module docstring: hand-set, not fitted.
-DEFAULT_A0 = 0.0
-DEFAULT_A1 = 1.0
-DEFAULT_A2 = 0.5
-DEFAULT_A3 = 0.3
-DEFAULT_A4 = 1.5
+# density. Fitted 2026-08-17 (I7) by sklearn LogisticRegression against 447
+# real adjudication rows (46 positive); see module docstring and CLAUDE.md's
+# "L3 adjudication" section for the fit's sample size, cross-validation
+# check, and before/after Brier/ECE. Original hand-set priors, for
+# reference: a0=0.0, a1=1.0, a2=0.5, a3=0.3, a4=1.5.
+DEFAULT_A0 = -2.6065
+DEFAULT_A1 = -0.0285
+DEFAULT_A2 = 0.7678
+DEFAULT_A3 = 0.6492
+DEFAULT_A4 = 0.0053
 
 # Matches CulpritConfig.min_confidence / ambiguity_margin's hardcoded
 # fallbacks (this module never imports config, per the project's layering

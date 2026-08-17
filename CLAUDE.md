@@ -332,37 +332,85 @@ problem as detecting an anomalous step sequence in an agent trace.
   RADAR: Intelligent Early Fraud Detection with Humans in the Loop"** (2022):
   presenting ranked suspects to a human rather than a verdict.
 
-- **The coefficients in `src/culprit/confidence.py` are hand-set priors that
-  have never been fitted to anything, because no labeled data exists yet.**
-  `bench_score.py` reports Brier, ECE, and reliability points from day one so
-  they can be fit by logistic regression once labeled data exists. Do not
-  describe anything in this system as calibrated; claiming calibration that
-  has not been measured is exactly the unearned claim the Litmus decision
-  log calls out repeatedly, and culprit does not repeat that mistake.
+- **The coefficients in `src/culprit/confidence.py` were hand-set priors
+  through 2026-08-17, then fitted by logistic regression against real
+  labeled data that same day (Integration task I7).** `bench_score.py` has
+  reported Brier, ECE, and reliability points from day one specifically so
+  this could happen once labeled data existed. The fit below is real and
+  cross-validated, not a claim in excess of what was measured - see the
+  numbers before treating this system as "calibrated" in any stronger sense
+  than what is documented here.
   - **A fit was attempted 2026-08-17 (I7) against I5's scored TRAIL/Who&When
-    cases and found there is nothing to fit against: the I5 benchmark path
-    never persisted the data it would require.** `bench.py::run_benchmark`
-    calls `pipeline.diagnose` directly and only ever persists the trace
-    itself via `write_trace`; `pipeline.diagnose`'s own docstring says
-    plainly it "does not persist" and names `jobs.diagnose_trace_job` as the
-    caller responsible for `store_diagnoses.write_diagnosis` - a path the
-    `culprit bench` CLI command never goes through. `benchmark_cases` has no
-    writer anywhere in the codebase either. Querying the live Postgres
-    instance confirmed this empirically: `diagnoses`, `adjudications`,
-    `signals`, `divergences`, and `benchmark_cases` all read back 0 rows;
-    `traces` holds exactly 1 row (`source='synth'`, unrelated to I5). The 763
-    TRAIL / 184 Who&When scored cases and their `calibrated_confidence`
-    values exist only as the in-memory `BenchReport` I5 printed and copied
-    into this file - never as rows a later session could join and fit
-    against. Coefficients remain the original hand-set priors (`DEFAULT_A0`
-    through `DEFAULT_A4`); no fit was performed, degenerate or otherwise,
-    because there was no data to fit. Making `culprit bench` call
-    `write_diagnosis` per trace is the real prerequisite for I7, not a
-    logistic-regression change.
-  - The cite-check term (fraction of `cited_step_indices` actually present
-    in the context packet) is the highest-value term in the formula: a
-    rationale citing step 47 when only 12-16 were shown is direct evidence
-    of confabulation and should crush confidence.
+    cases and initially found there was nothing to fit against: the I5
+    benchmark path never persisted the data it would require.**
+    `bench.py::run_benchmark` called `pipeline.diagnose` directly and only
+    ever persisted the trace itself via `write_trace`;
+    `jobs.diagnose_trace_job` was the only caller of
+    `store_diagnoses.write_diagnosis`, a path `culprit bench` never went
+    through, and `benchmark_cases` had no writer anywhere in the codebase.
+    Querying live Postgres confirmed this empirically: `diagnoses`,
+    `adjudications`, `signals`, `divergences`, `benchmark_cases` all read
+    back 0 rows.
+  - **That persistence gap was fixed later the same day.**
+    `run_benchmark` now calls `store_diagnoses.write_diagnosis` per trace
+    (mirroring `jobs.diagnose_trace_job`'s pattern) and a new
+    `store_benchmarks.write_benchmark_cases` persists each trace's
+    ground-truth `BenchmarkCase` rows, both wired in right after the
+    existing `write_trace` call, reusing `bench.py`'s existing pooled
+    `conn_fn`/`recycle_fn`. Tests in `tests/test_bench.py` prove the calls
+    happen, fully offline. The harness was then re-run for real (no
+    `--ablate l2`, to save spend) - 129 TRAIL traces / 763 cases and 184
+    Who&When traces/cases, `gemini/gemini-2.5-flash-lite`, ~$0.118 total -
+    and this time the writes landed: 313 new `diagnoses` rows, 947
+    `benchmark_cases` rows, 466 `adjudications` rows.
+    Headline numbers moved slightly from I5's original run (real-LLM
+    nondeterminism, not a regression): TRAIL exact accuracy 0.025 -> 0.014,
+    candidate_recall@5 0.065 -> 0.078, earliness_error +1.689 -> -0.015;
+    Who&When abstention 0.152 -> 0.130, candidate_recall@5 0.038 -> 0.037.
+    Joint accuracy stayed 0.000 on both. Raw run log:
+    `data/benchmarks/results/bench_runs_20260817T210006Z.txt`.
+  - **The fit itself, real and non-degenerate.** Per-candidate rows (one per
+    non-abstained `Adjudication`, not one per trace) were built by joining
+    `diagnoses`/`adjudications` to `benchmark_cases` on `trace_id`: 447
+    usable rows, 46 positive (10.3%) where the candidate's `step_index`
+    matched a trace's ground-truth step - imbalanced but not the
+    single-class degenerate case the class-balance risk warned about.
+    `prior`/`agreement`/`evidence_density` aren't stored on `adjudications`,
+    so each row's inputs were reconstructed from persisted
+    `signals`+`steps`+`spans`+the persisted `cited_step_indices`, calling
+    the real `candidates.py` prior formula and `context_window.build_context_packet`
+    against the same persisted trace data L3 used originally; reconstruction
+    was verified exact (0/447 mismatches against the persisted
+    `calibrated_confidence`, which the old hand-set coefficients produced)
+    before trusting the fit. `sklearn.linear_model.LogisticRegression`
+    against `(logit(model_confidence), prior, agreement, evidence_density)`
+    gave `a0=-2.6065 a1=-0.0285 a2=0.7678 a3=0.6492 a4=0.0053`. 5-fold
+    stratified cross-validation (predicted probabilities out-of-fold) gave
+    Brier 0.0909, closely tracking the in-sample Brier of 0.0902 rather than
+    diverging - the signal generalizes, it isn't memorizing 447 rows. Before
+    (hand-set priors, same 447-row population): Brier 0.8777, ECE 0.8861.
+    After (fitted): Brier 0.0902, ECE 0.0035. These before/after numbers are
+    **not** the same population as the 0.957/0.945 Brier reported in
+    "Measured results so far" below - that number scores only each trace's
+    one committed (post-abstention) winner, while this fit scores every
+    non-abstained adjudicated candidate, winner or not, which is why the
+    "before" number here (0.878) differs so much from 0.957. `DEFAULT_A0`
+    through `DEFAULT_A4` in `confidence.py` now hold these fitted values;
+    `tests/test_confidence.py` pins them.
+  - **The fit's real finding: cite-check and raw model confidence turned out
+    not to matter, prior and L1 agreement do.** The hand-set priors assumed
+    `a4` (cite-check) would dominate ("a rationale citing step 47 when only
+    12-16 were shown is direct evidence of confabulation"); the fit found
+    `a4=0.0053`, near zero. `a1` (the model's own raw confidence) came back
+    near zero too (and slightly negative), matching the earlier measured
+    finding that raw confidence saturates near 1.0 regardless of actual
+    correctness. `a2` (prior, i.e. L1 detector severity) and `a3` (L1
+    agreement) turned out to carry nearly all the real predictive signal:
+    whether a deterministic detector already flagged the step, and whether
+    L3's chosen failure class matches that detector's category hint, matters
+    far more than anything the LLM itself reports about its own certainty
+    or citations. This is a genuinely new, measured finding, not a
+    confirmation of the original hand-set assumption.
 
 ### L5 clustering
 
@@ -714,6 +762,16 @@ trace persisted through the production tables and diagnosed inline by
 `pipeline.diagnose` on `gemini/gemini-2.5-flash-lite`. Total Gemini spend for
 all four runs plus the earlier smoke sample: roughly $0.23.
 
+*(I5's benchmark path did not persist diagnoses at the time, see "L3
+adjudication" above; the numbers below are I5's original run. I7 re-ran the
+harness the same day after fixing that, non-ablated only - see "L3
+adjudication" for the persisted-data fit. The re-run's headline numbers are
+close but not identical, real-LLM nondeterminism: TRAIL exact accuracy 0.025
+-> 0.014, candidate_recall@5 0.065 -> 0.078, earliness_error +1.689 ->
+-0.015; Who&When abstention 0.152 -> 0.130. Joint accuracy stayed 0.000 on
+both. Full I7 re-run numbers:
+`data/benchmarks/results/bench_runs_20260817T210006Z.txt`.)*
+
 TRAIL, all 763 annotated errors (a prediction is credited if it matches ANY
 annotated error of its trace):
 
@@ -818,12 +876,18 @@ benchmarks among them.
   traces / 763 annotated errors and 184 logs, respectively), not the
   hand-written 3-record fixtures used to build the adapters. See "Measured
   results so far" above for the numbers; not duplicated here.
+- **Confidence coefficients are now fitted, not hand-set.** `bench.py` was
+  wired to persist diagnoses and benchmark cases, the harness was re-run, and
+  `confidence.py`'s `DEFAULT_A0`-`DEFAULT_A4` were fit by logistic regression
+  against 447 real adjudication rows and cross-validated. See "L3
+  adjudication" above for the full fit, its sample size, and the honest
+  caveat about what population it does and doesn't generalize to. Do not
+  describe the *system's end-to-end accuracy* as calibrated beyond what this
+  fit measured - only the confidence-score mapping was fit, not a claim that
+  the pipeline finds the right answer more often.
 
 **Still unverified:**
 
-- **Confidence coefficients remain hand-set priors.** Nothing has been fitted to
-  labeled data. Report Brier, ECE, and reliability points from `bench_score.py`,
-  but do not describe the system as calibrated.
 - **Failure path through the full CLI+DB pipeline.** A synthetic failure was
   adjudicated in-process in the live smoke test, and the clean OTLP fixture ran
   through the CLI, but a real failure trace has not yet been ingested,
@@ -834,6 +898,8 @@ benchmarks among them.
 ## Status
 
 Phase 2 closeout landed on `main` (current HEAD `cc6296f`); there is no
-`phase-2-closeout` branch. Integration items I1-I6 are done. I7 (calibration)
-is in progress. See `AI_docs/PHASES.md` for the authoritative resume point,
-the Phase 1 workstream table, and the Phase 2 integration checklist.
+`phase-2-closeout` branch. Integration items I1-I7 are done: I7 (calibration)
+fixed the benchmark harness's missing persistence, re-ran it against real
+TRAIL/Who&When data, and fit `confidence.py`'s coefficients against the
+result. See `AI_docs/PHASES.md` for the authoritative resume point, the
+Phase 1 workstream table, and the Phase 2 integration checklist.

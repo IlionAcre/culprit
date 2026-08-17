@@ -1,4 +1,11 @@
+import pytest
+
 from culprit.confidence import (
+    DEFAULT_A0,
+    DEFAULT_A1,
+    DEFAULT_A2,
+    DEFAULT_A3,
+    DEFAULT_A4,
     agrees_with_l1,
     calibrate_confidence,
     cite_check,
@@ -18,6 +25,33 @@ def _adjudication(
         cited_step_indices=[step_index], abstained=abstained, model="m",
         prompt_tokens=None, completion_tokens=None, cost_usd=None, error=error,
     )
+
+
+# --- fitted default coefficients (Integration task I7, 2026-08-17) --------
+
+def test_default_coefficients_are_the_2026_08_17_fitted_values():
+    """Fitted by logistic regression against 447 real TRAIL/Who&When
+    adjudication rows, 46 positive (CLAUDE.md's "L3 adjudication" section
+    has the full fit: sample size, cross-validation check, before/after
+    Brier/ECE). Regression-pins the values so a future edit to
+    confidence.py cannot silently drift back toward the old hand-set priors
+    (a0=0.0, a1=1.0, a2=0.5, a3=0.3, a4=1.5) without a test failure calling
+    it out."""
+    assert DEFAULT_A0 == pytest.approx(-2.6065)
+    assert DEFAULT_A1 == pytest.approx(-0.0285)
+    assert DEFAULT_A2 == pytest.approx(0.7678)
+    assert DEFAULT_A3 == pytest.approx(0.6492)
+    assert DEFAULT_A4 == pytest.approx(0.0053)
+
+
+def test_default_coefficients_now_weight_prior_and_agreement_over_raw_confidence_and_cite_check():
+    """The fit's headline finding, the opposite of the hand-set prior's
+    assumption that cite-check (a4) would dominate: raw model self-reported
+    confidence (a1) and cite-check evidence density (a4) both came back
+    near zero, while prior (a2, detector severity) and L1 agreement (a3)
+    carry nearly all the real predictive signal."""
+    assert abs(DEFAULT_A2) > abs(DEFAULT_A1)
+    assert abs(DEFAULT_A3) > abs(DEFAULT_A4)
 
 
 # --- cite_check --------------------------------------------------------
