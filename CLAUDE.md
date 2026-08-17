@@ -411,6 +411,24 @@ problem as detecting an anomalous step sequence in an agent trace.
     far more than anything the LLM itself reports about its own certainty
     or citations. This is a genuinely new, measured finding, not a
     confirmation of the original hand-set assumption.
+  - **Open issue found while fixing `tests/test_pipeline.py` post-I7 (not
+    yet resolved, needs a maintainer decision): the fitted coefficients'
+    output ceiling now sits below the 0.55 confidence floor.** A brute-force
+    scan of `calibrate_confidence` over its whole realistic input domain
+    (`prior` in [0,1], `agreement` in {True, False}, `evidence_density` in
+    [0,1], `model_confidence` in (0,1)) tops out around 0.28-0.29, even at
+    the strongest inputs this pipeline can ever construct (`prior=1.0` via
+    the co-location bonus, `agreement=True`, `evidence_density=1.0`, high
+    model confidence) - versus up to 0.999 under the old hand-set
+    coefficients for the identical inputs. That means `select_diagnosis`'s
+    confidence-floor gate now abstains unconditionally on every trace,
+    regardless of evidence strength, until either the floor or the fit is
+    revisited; this was left unfixed here per this task's explicit
+    guardrail against touching `DEFAULT_A0`-`DEFAULT_A4` or the 0.55 floor,
+    and `test_diagnose_wires_l3_and_correctly_abstains_below_the_fitted_confidence_ceiling`
+    (renamed from `..._and_surfaces_a_committed_root_cause`) now asserts
+    the correct current (abstained) behavior instead of pinning the
+    no-longer-reachable non-abstained one.
 
 ### L5 clustering
 

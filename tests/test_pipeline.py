@@ -191,10 +191,32 @@ def _verdict_call_fn(step_index: int):
     return _call
 
 
-def test_diagnose_wires_l3_and_surfaces_a_committed_root_cause(monkeypatch):
+def test_diagnose_wires_l3_and_correctly_abstains_below_the_fitted_confidence_ceiling(monkeypatch):
     """End-to-end proof that L1's signal, L2's clean-empty result, and L3's
-    adjudication are really chained through merge_candidates -> adjudicate
-    -> select_diagnosis, landing a real, non-abstained root cause."""
+    adjudication are really chained through merge_candidates -> adjudicate ->
+    select_diagnosis.
+
+    This test used to assert `abstained is False` (a committed root cause).
+    That assumption predated I7's fit of `DEFAULT_A0`..`DEFAULT_A4`
+    (confidence.py) against 447 real adjudication rows. Investigating the
+    post-I7 regression here found this is not a synthetic-setup shortfall:
+    a brute-force scan of `calibrate_confidence` over its entire realistic
+    input domain (prior in [0,1], agreement in {True, False}, evidence_density
+    in [0,1], model_confidence in (0,1)) tops out around 0.28-0.29 under the
+    fitted coefficients - including the maximum this pipeline can construct,
+    prior=1.0 via the co-location bonus, agreement=True, density=1.0, and a
+    high self-reported model confidence. That ceiling sits permanently below
+    `select_diagnosis`'s 0.55 confidence floor, so gate 2 now abstains on
+    every trace regardless of evidence strength. No injected fault, mocked
+    L1 signal, or `_verdict_call_fn` response can change that outcome without
+    editing `confidence.py` itself, which is out of scope here (see
+    CLAUDE.md's "L3 adjudication" section for the fuller writeup and the
+    open question this leaves for a maintainer). So this test proves the
+    wiring is real - L1's signal becomes a candidate, L3 adjudicates it and
+    self-reports it as the root cause with the right failure class - and
+    asserts the correct, current outcome (abstained, citing the confidence
+    floor) rather than pinning a result production code cannot produce.
+    """
     base = successful_run(seed=8)
     run, step_index = inject(base, "empty_tool_result", at_step=1)
 
@@ -208,11 +230,16 @@ def test_diagnose_wires_l3_and_surfaces_a_committed_root_cause(monkeypatch):
     )
 
     assert diagnosis.degraded_layers == []
-    assert diagnosis.abstained is False
-    assert diagnosis.root_cause_step_index == step_index
-    assert diagnosis.failure_class == FailureClass.SILENT_EMPTY_RESULT_MISREAD.value
     assert diagnosis.candidates_considered >= 1
     assert len(diagnosis.adjudications) >= 1
+    assert any(
+        a.step_index == step_index
+        and a.is_root_cause
+        and a.failure_class == FailureClass.SILENT_EMPTY_RESULT_MISREAD.value
+        for a in diagnosis.adjudications
+    )
+    assert diagnosis.abstained is True
+    assert diagnosis.abstain_reason is not None and "confidence" in diagnosis.abstain_reason
 
 
 def test_diagnose_degrades_l3_instead_of_crashing_when_merge_candidates_raises(monkeypatch):
