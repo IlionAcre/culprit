@@ -685,10 +685,82 @@ operate purely on structured payload fields. Prompt realism cannot move a
 feature vector that never inspects prompts. The change still earns its place by
 unblocking `unused_retrieval` at L1, which does read message text.
 
+**Real benchmark scores, 2026-08-17 (Integration task I5).** The harness
+scored the full public releases, not samples: TRAIL (129 traces, 763
+annotated errors, GAIA + SWE Bench splits) and Who&When (184 logs), every
+trace persisted through the production tables and diagnosed inline by
+`pipeline.diagnose` on `gemini/gemini-2.5-flash-lite`. Total Gemini spend for
+all four runs plus the earlier smoke sample: roughly $0.23.
+
+TRAIL, all 763 annotated errors (a prediction is credited if it matches ANY
+annotated error of its trace):
+
+| Metric | Value |
+|---|---|
+| Abstention rate | 0.372 |
+| Exact step accuracy | 0.025 |
+| Tolerance accuracy @1 / @3 | 0.221 / 0.366 |
+| **Joint accuracy (step AND class)** | **0.000** |
+| Class accuracy | 0.014 |
+| Candidate recall @1 / @3 / @5 | 0.008 / 0.065 / 0.065 |
+| Earliness error (committed cases) | +1.689 steps |
+| Brier / ECE | 0.957 / 0.959 |
+
+TRAIL, earliest annotated error only (129 primary cases): abstention 0.295,
+exact 0.000, tolerance@3 0.434, recall@5 0.033, earliness +4.527 steps.
+
+Who&When (184 cases, every case primary): abstention 0.152, exact 0.033,
+tolerance @1 / @3 0.120 / 0.250, joint 0.000, class accuracy 0.114 (ground
+truth class is always `unknown` by construction, so this only measures how
+often the system says `unknown` back), recall@5 0.038, earliness error
++13.436 steps, Brier 0.945.
+
+**L2 ablation on real data: the delta is zero.** `--ablate l2` moves TRAIL
+exact 0.025 -> 0.025, joint 0.000 -> 0.000, recall@5 0.065 -> 0.092; Who&When
+exact 0.033 -> 0.033, recall@5 0.038 -> 0.039. L2 abstains
+`insufficient_references` on essentially every real trace: the reference pool
+holds almost no successful runs of comparable tasks, so the contrastive
+layer contributes nothing under production-like conditions and removing it
+changes nothing measurable. This does not refute L2, it says the layer is
+untestable here until the corpus accumulates real successful traces.
+
+**How to read these numbers, and why they are not tuned away.** The binding
+constraint is candidate recall, not L3 adjudication quality: the true step
+reached L3's shortlist in 6.5 percent (TRAIL) and 3.8 percent (Who&When) of
+cases, so end-to-end accuracy is capped near zero no matter how good
+adjudication is. L1's detectors, built and unit-tested against `synth.py`
+traces, fire sparsely on real OpenInference traces. Second, when the system
+does commit it is confidently wrong: Brier ~0.96 with calibrated confidence
+saturating near 1.0 against roughly 2-3 percent accuracy, meaning the
+hand-set calibration priors (see L3 adjudication above) are now measured to
+be wildly overconfident. Third, the earliness error is positive on both
+benchmarks (+1.7 TRAIL, +13.4 Who&When): the system blames steps downstream
+of the true cause, the precise failure mode the product exists to eliminate,
+now measured on real data rather than asserted. Context, not excuse: the
+TRAIL paper's best LLM judge localizes around 11 percent and Who&When's best
+reported step accuracy is around 14 percent, both using trace-specific
+frontier-model prompts; this pipeline is generic and costs roughly $0.0005
+per trace.
+
+**Dataset reality vs the adapter's guesses (I5 record).** Source: HuggingFace
+`PatronusAI/TRAIL` (gated, pulled via the public ModelScope mirror of the
+same files, Apache-2.0) and `github.com/mingyin1/Agents_Failure_Attribution`.
+Every guessed key in `TRAIL_CATEGORY_MAP` was wrong - the real taxonomy is 21
+title-case categories with spelling/casing variants in the wild, mapped with
+documented plurality judgment calls in `trail.py`. Data quality findings: the
+public release has 131 traces (100 GAIA, 31 SWE Bench), not the paper's 148;
+2 traces carry zero error annotations; 2 of 765 annotations reference spans
+that do not exist; 1 annotation file has a literal trailing-comma syntax
+error upstream; 1 trace emits the same span twice (deduped in the adapter).
+Who&When's real schema needed only a thin prepare script; its `mistake_step`
+is a direct history index as the adapter assumed.
+
 ## What was verified vs what remains unverified
 
-A reader must not be able to mistake this for a benchmarked system. The
-unbenchmarked part is still true: no real TRAIL or Who&When scores exist.
+A reader must not be able to mistake this for a system whose scores are good.
+Real TRAIL and Who&When scores now exist and they are close to floor - see
+"Measured results so far" for the numbers, joint accuracy 0.000 on both
+benchmarks among them.
 
 **Verified 2026-08-16 against live services:**
 
@@ -718,11 +790,15 @@ unbenchmarked part is still true: no real TRAIL or Who&When scores exist.
   Redis 7 runs in a podman container at `172.27.120.193:56379`. Job functions
   executed inline; the worker path was not verified.
 
+**Verified 2026-08-17:**
+
+- **Benchmark harness scored the real, full TRAIL and Who&When datasets** (129
+  traces / 763 annotated errors and 184 logs, respectively), not the
+  hand-written 3-record fixtures used to build the adapters. See "Measured
+  results so far" above for the numbers; not duplicated here.
+
 **Still unverified:**
 
-- **Benchmark harness has never scored a real TRAIL or Who&When dataset.** Both
-  adapters were built against hand-written 3-record fixtures. `TRAIL_CATEGORY_MAP`
-  keys are best-effort guesses at TRAIL's taxonomy, flagged as such in `trail.py`.
 - **Confidence coefficients remain hand-set priors.** Nothing has been fitted to
   labeled data. Report Brier, ECE, and reliability points from `bench_score.py`,
   but do not describe the system as calibrated.
@@ -735,6 +811,7 @@ unbenchmarked part is still true: no real TRAIL or Who&When scores exist.
 
 ## Status
 
-Phase 2 closeout is in progress on branch `phase-2-closeout`. See
-`AI_docs/PHASES.md` for the authoritative resume point, the Phase 1
-workstream table, and the Phase 2 integration checklist.
+Phase 2 closeout landed on `main` (current HEAD `cc6296f`); there is no
+`phase-2-closeout` branch. Integration items I1-I6 are done. I7 (calibration)
+is in progress. See `AI_docs/PHASES.md` for the authoritative resume point,
+the Phase 1 workstream table, and the Phase 2 integration checklist.
