@@ -273,3 +273,102 @@ def test_read_diagnoses_for_trace_delegates_to_injected_reader():
     )
 
     assert result == diagnoses
+
+
+class _FakeConn:
+    """Stands in for a psycopg Connection: no real Postgres involved, just
+    enough surface (`autocommit`) for _conn_fn_from_env's conn_fn to touch."""
+
+    def __init__(self):
+        self.autocommit = False
+
+
+class _FakePool:
+    """Stands in for psycopg_pool.ConnectionPool. Records every getconn/
+    putconn/close call so a test can prove connections are released via
+    putconn, not just dropped when the pool is closed - the exact bug
+    bench.pooled_conn_fn's docstring documents: with this project's
+    psycopg_pool version, closing the pool does not return checked-out
+    connections to it."""
+
+    def __init__(self):
+        self.opened = False
+        self.closed = False
+        self.getconn_calls = 0
+        self.putconn_conns = []
+
+    def open(self):
+        self.opened = True
+
+    def getconn(self):
+        self.getconn_calls += 1
+        return _FakeConn()
+
+    def putconn(self, conn):
+        self.putconn_conns.append(conn)
+
+    def close(self):
+        self.closed = True
+
+
+def test_diagnose_trace_job_releases_every_checked_out_connection_even_when_it_raises(monkeypatch):
+    """jobs.py's own version of the bug bench.py's pooled_conn_fn was built
+    to fix (see that docstring): a bare pool.getconn with no recycling never
+    returns a checked-out connection to the pool, and a plain pool.close()
+    does not putconn connections still checked out with this psycopg_pool
+    version - it just leaves them unreturned while the pool tries to shut
+    down. Proven here with a fake pool in place of Postgres: when no conn_fn
+    is injected (so the job builds its own pool via _conn_fn_from_env) and
+    the underlying work raises partway through, every connection the job
+    checked out must still be putconn'd, and the exception must still
+    propagate rather than being swallowed by cleanup."""
+    fake_pool = _FakePool()
+    monkeypatch.setattr("culprit.db.make_pool", lambda dsn, **kw: fake_pool)
+    monkeypatch.delenv("CULPRIT_DATABASE_URL", raising=False)
+
+    def raising_loader(conn_fn, trace_id):
+        conn_fn()
+        conn_fn()
+        conn_fn()
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        diagnose_trace_job(
+            "trace-1",
+            call_fn=lambda model, prompt: ("out", 1.0, 0.0, 10, 5),
+            embed_fn=lambda texts: [[0.0] * 384 for _ in texts],
+            trace_loader=raising_loader,
+            diagnosis_writer=lambda conn_fn, d: None,
+        )
+
+    assert fake_pool.getconn_calls == 3
+    assert len(fake_pool.putconn_conns) == 3
+    assert fake_pool.closed is True
+
+
+def test_conn_fn_from_env_sizes_its_pool_for_one_jobs_worst_case(monkeypatch):
+    """diagnose_trace_job alone can issue roughly 28 checkouts in one call
+    (L2's up-to-contrast.MAX_REFERENCES reference loads plus its own write
+    and read paths, per bench.pooled_conn_fn's docstring) against a fresh
+    pool built just for that one job - unlike bench.py, nothing here
+    recycles mid-job, so the pool itself must be sized above that worst
+    case rather than the db.make_pool default of 10."""
+    captured = {}
+
+    def fake_make_pool(dsn, **kwargs):
+        captured.update(kwargs)
+        return _FakePool()
+
+    monkeypatch.setattr("culprit.db.make_pool", fake_make_pool)
+    monkeypatch.delenv("CULPRIT_DATABASE_URL", raising=False)
+
+    from culprit.jobs import _conn_fn_from_env
+
+    conn_fn, close = _conn_fn_from_env()
+    try:
+        conns = [conn_fn() for _ in range(28)]
+        assert all(conn.autocommit for conn in conns)
+    finally:
+        close()
+
+    assert captured.get("max_size") == 32

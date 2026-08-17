@@ -77,18 +77,52 @@ def _seam(module: str, attr: str, note: str = ""):
         ) from e
 
 
-def _conn_fn_from_env() -> ConnFn:
+def _conn_fn_from_env() -> tuple[ConnFn, Callable[[], None]]:
     """Lazily builds a psycopg ConnectionPool against CULPRIT_DATABASE_URL
     (or the hardcoded default), built on first call so `import culprit.jobs`
     never dials Postgres. Reads an env var rather than culprit.config
     directly (only cli.py/plugin registries read config, see CLAUDE.md);
-    cli.py's callback sets this env var from CulpritConfig.database_url."""
+    cli.py's callback sets this env var from CulpritConfig.database_url.
+
+    Returns `(conn_fn, close)`, mirroring `bench.pooled_conn_fn`'s fix for
+    the identical bug: store-layer functions check a connection OUT via
+    `conn_fn()` and never return it (store_traces.py's "callers own
+    pooling" contract), and with this project's psycopg_pool version
+    `conn.close()` does not return a checked-out connection to the pool -
+    only `pool.putconn(conn)` does (verified empirically in bench.py; see
+    its docstring). Unlike `bench.py`, which amortizes one pool across an
+    entire run and recycles per-trace, each job call here builds its own
+    fresh pool for just that one call, so there is nothing to recycle
+    mid-job - `close()` simply putconns every connection this job issued
+    once its work is done (success or exception), then closes the pool.
+    `max_size=32` mirrors `bench.pooled_conn_fn`'s override of `make_pool`'s
+    default of 10: `diagnose_trace_job` alone can issue ~28 checkouts via
+    L2's up-to-`contrast.MAX_REFERENCES` reference loads plus its own write
+    and read paths, so the default is too small for one job's worst case."""
     from culprit.db import make_pool
 
     dsn = os.environ.get("CULPRIT_DATABASE_URL", DEFAULT_DATABASE_URL)
-    pool = make_pool(dsn)
+    pool = make_pool(dsn, max_size=32)
     pool.open()
-    return pool.getconn
+    issued: list = []
+
+    def conn_fn():
+        conn = pool.getconn()
+        # See pooled_conn_fn: autocommit avoids putconn rolling back an
+        # INTRANS read connection noisily on close; explicit `with
+        # conn.transaction():` write blocks (store_traces.py) are
+        # unaffected by autocommit.
+        conn.autocommit = True
+        issued.append(conn)
+        return conn
+
+    def close() -> None:
+        for conn in issued:
+            pool.putconn(conn)
+        issued.clear()
+        pool.close()
+
+    return conn_fn, close
 
 
 def _default_trace_loader(conn_fn: ConnFn, trace_id: str) -> Trace:
@@ -184,7 +218,10 @@ def diagnose_trace_job(
     CulpritConfig.model, same pattern as CULPRIT_DATABASE_URL/
     CULPRIT_REDIS_URL), falling back to DEFAULT_MODEL so a worker started
     without going through the CLI callback still has a usable default."""
-    conn_fn = conn_fn or _conn_fn_from_env()
+    owns_conn = conn_fn is None
+    close_conn = None
+    if owns_conn:
+        conn_fn, close_conn = _conn_fn_from_env()
     call_fn = call_fn or litellm_call
     embed_fn = embed_fn or embed_texts
     model = model or os.environ.get("CULPRIT_MODEL", DEFAULT_MODEL)
@@ -207,6 +244,14 @@ def diagnose_trace_job(
             extra={"event": "diagnose_job_failed", "trace_id": trace_id},
         )
         raise
+    finally:
+        # Releases every connection this job checked out (see
+        # _conn_fn_from_env's docstring), success or exception alike, so a
+        # raising job still returns its connections to the pool instead of
+        # leaking them - not run when the caller injected its own conn_fn,
+        # since that caller owns that connection's lifecycle.
+        if close_conn is not None:
+            close_conn()
     logger.info(
         "diagnose job completed",
         extra={"event": "diagnose_job_completed", "trace_id": trace_id, "diagnosis_id": diagnosis.diagnosis_id},
@@ -233,7 +278,10 @@ def recluster_job(
     `cluster_id`s (item 1), and `cluster_labeler` reads each cluster's prior
     state through that same stable identity so `needs_relabel`'s skip has
     something real to compare against on the next pass."""
-    conn_fn = conn_fn or _conn_fn_from_env()
+    owns_conn = conn_fn is None
+    close_conn = None
+    if owns_conn:
+        conn_fn, close_conn = _conn_fn_from_env()
     embed_fn = embed_fn or embed_texts
     model = model or os.environ.get("CULPRIT_MODEL", DEFAULT_MODEL)
 
@@ -253,6 +301,10 @@ def recluster_job(
             extra={"event": "recluster_job_failed"},
         )
         raise
+    finally:
+        # See diagnose_trace_job's finally block.
+        if close_conn is not None:
+            close_conn()
     logger.info(
         "recluster job completed",
         extra={
@@ -276,12 +328,20 @@ def ingest_trace(
     endpoint either way), returning the new trace_id. Called from both
     api.py's `POST /v1/traces` and cli.py's `ingest` command so the two
     surfaces share one code path."""
-    conn_fn = conn_fn or _conn_fn_from_env()
+    owns_conn = conn_fn is None
+    close_conn = None
+    if owns_conn:
+        conn_fn, close_conn = _conn_fn_from_env()
     logger.info(
         "ingest started",
         extra={"event": "ingest_started", "content_type": content_type, "byte_count": len(payload)},
     )
-    trace_id = ingest_fn(payload, content_type, conn_fn)
+    try:
+        trace_id = ingest_fn(payload, content_type, conn_fn)
+    finally:
+        # See diagnose_trace_job's finally block.
+        if close_conn is not None:
+            close_conn()
     logger.info("ingest completed", extra={"event": "ingest_completed", "trace_id": trace_id})
     return trace_id
 
@@ -295,5 +355,13 @@ def read_diagnoses_for_trace(
     """Every persisted diagnosis for one trace, newest alongside older
     ones (diagnoses.trace_id is deliberately not unique, see CLAUDE.md),
     used by `GET /traces/{id}/diagnoses` and `culprit show`."""
-    conn_fn = conn_fn or _conn_fn_from_env()
-    return diagnoses_reader(conn_fn, trace_id)
+    owns_conn = conn_fn is None
+    close_conn = None
+    if owns_conn:
+        conn_fn, close_conn = _conn_fn_from_env()
+    try:
+        return diagnoses_reader(conn_fn, trace_id)
+    finally:
+        # See diagnose_trace_job's finally block.
+        if close_conn is not None:
+            close_conn()
