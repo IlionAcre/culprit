@@ -1,20 +1,19 @@
 """Confidence calibration and trace-level abstention for L3 adjudication.
 
-**The five coefficients below (a0-a4) were fitted 2026-08-17 (Integration
-task I7) by logistic regression against 447 real adjudication rows** from
-the TRAIL/Who&When benchmark re-run (`bench.py` now persists diagnoses and
-`benchmark_cases`; see CLAUDE.md's "L3 adjudication" section for the full
-before/after numbers and how the fit was validated). They replace the
-original hand-set priors (`a0=0.0, a1=1.0, a2=0.5, a3=0.3, a4=1.5`, kept
-below in a comment for reference) now that real labeled data exists.
-
-`cite_check`'s coefficient (`a4`) came back near zero in the fit
-(0.0053) - the opposite of the hand-set prior's assumption that it would be
-the dominant term. `a1` (the model's own raw self-reported confidence) also
-came back near zero (and slightly negative), consistent with CLAUDE.md's
-measured finding that raw model confidence saturates near 1.0 regardless of
-actual correctness. `a2` (prior, i.e. detector severity) and `a3` (L1
-agreement) turned out to carry nearly all the real predictive signal.
+**Ten coefficients (a0-a9), fitted 2026-08-17 in two passes.** I7 first fit
+`a0-a4` against 447 real adjudication rows on 4 features
+(`model_confidence`, `prior`, `agreement`, `evidence_density`); that fit's
+ceiling (~0.29) sat below the 0.55 floor, so the system abstained on every
+trace. A same-day follow-up found richer, production-available features
+(`Candidate.rank`, step position, step depth, L1 signal count, `is_fallback`)
+lift out-of-fold AUC ~0.61 -> ~0.74 on the same population and hold up on
+TRAIL-only data alone, ruling out the lift being just "which benchmark is
+this" (a dataset-identity feature was tested and deliberately excluded from
+what ships - meaningless on real traffic, which has no such label). This
+module now fits all ten coefficients on that richer set, floor chosen from a
+precision-at-threshold table. Full history and numbers: CLAUDE.md's "L3
+adjudication" section (46 positives total; TRAIL-only replication is the
+strongest evidence this generalizes, not the full-population AUC alone).
 
 `select_diagnosis` implements the plan's three independent abstention
 gates. Uber's "Project RADAR" is the citation CLAUDE.md records for this
@@ -27,21 +26,47 @@ from dataclasses import dataclass
 from culprit.signals import Adjudication
 
 # a0 intercept, a1 logit(model_conf), a2 prior, a3 agreement, a4 evidence
-# density. Fitted 2026-08-17 (I7) by sklearn LogisticRegression against 447
-# real adjudication rows (46 positive); see module docstring and CLAUDE.md's
-# "L3 adjudication" section for the fit's sample size, cross-validation
-# check, and before/after Brier/ECE. Original hand-set priors, for
-# reference: a0=0.0, a1=1.0, a2=0.5, a3=0.3, a4=1.5.
-DEFAULT_A0 = -2.6065
-DEFAULT_A1 = -0.0285
-DEFAULT_A2 = 0.7678
-DEFAULT_A3 = 0.6492
-DEFAULT_A4 = 0.0053
+# density, a5 rank score, a6 step position, a7 step depth, a8 L1 signal
+# count, a9 is_fallback. Fitted against the same 447-row population as I7
+# (46 positive) on the richer feature set; see CLAUDE.md's "L3 adjudication"
+# for sample size, CV AUC, and the precision-at-threshold table the floor
+# below was chosen from. `a3` (agreement) came back small and slightly
+# negative here - once rank/position/depth/signal-count are present,
+# matching an L1 category hint carries almost no independent signal, unlike
+# I7's fit where it was one of the two dominant terms. Kept for continuity
+# with `agrees_with_l1`/`adjudicate.py` rather than dropped on one fit.
+# Hand-set priors, for reference: a0=0.0, a1=1.0, a2=0.5, a3=0.3, a4=1.5,
+# a5-a9=0.0. I7's 4-feature fit, superseded here: a0=-2.6065, a1=-0.0285,
+# a2=0.7678, a3=0.6492, a4=0.0053.
+DEFAULT_A0 = -4.3970
+DEFAULT_A1 = -0.0482
+DEFAULT_A2 = 0.2273
+DEFAULT_A3 = -0.0892
+DEFAULT_A4 = 0.0020
+DEFAULT_A5 = 0.1206
+DEFAULT_A6 = 2.1086
+DEFAULT_A7 = 1.1989
+DEFAULT_A8 = 0.2925
+DEFAULT_A9 = -1.5935
 
-# Matches CulpritConfig.min_confidence / ambiguity_margin's hardcoded
-# fallbacks (this module never imports config, per the project's layering
-# rule - only cli.py and the plugin registries do).
-_DEFAULT_MIN_CONFIDENCE = 0.55
+# Candidate.rank never exceeds candidates.py's own _DEFAULT_MAX_CANDIDATES,
+# duplicated rather than imported (this module never imports outside
+# signals.py, per the project's layering rule - only cli.py and the plugin
+# registries import culprit.config).
+_DEFAULT_MAX_CANDIDATES = 5
+
+# 0.15: the lowest threshold, in the precision-at-threshold table computed
+# against this same 447-row population (CLAUDE.md has the full table),
+# where committed volume is trustworthy (n=122, well over the ~15 floor)
+# and precision (23.8%, out-of-fold, averaged over 5 CV seeds) is
+# meaningfully above the 10.3% base rate - roughly 2.3x, versus 1.4-1.8x at
+# thresholds below it. Higher floors buy more precision (0.18: 41.7%) at
+# the cost of most remaining coverage (13.4% vs 27.3%) and a smaller,
+# more volatile committed set. Replaces the old 0.55 floor, which sat above
+# this model's predecessor's ~0.29 ceiling and forced unconditional
+# abstention; this model's own ceiling is far higher (~0.83-0.91 over the
+# realistic input domain, CLAUDE.md), so 0.15 is comfortably reachable.
+_DEFAULT_MIN_CONFIDENCE = 0.15
 _DEFAULT_AMBIGUITY_MARGIN = 0.08
 
 _EPS = 1e-6
@@ -82,28 +107,84 @@ def agrees_with_l1(candidate_categories: list[str], chosen_failure_class: str) -
     return chosen_failure_class in candidate_categories
 
 
+def step_position(step_index: int, step_count: int) -> float:
+    """Candidate step's position within the trace's whole step sequence,
+    normalized to [0, 1]: 0.0 at the first step, 1.0 at the last. A trace of
+    0 or 1 steps has no meaningful position to normalize against, so this
+    returns 0.0 rather than dividing by zero."""
+    if step_count is None or step_count <= 1:
+        return 0.0
+    return step_index / (step_count - 1)
+
+
+def depth_norm(depth: int, max_depth: int) -> float:
+    """Step depth (nesting level in the span tree, see `schemas.Step`)
+    normalized against the deepest step anywhere in this trace. A flat
+    trace with no nesting (`max_depth == 0`) has nothing to normalize
+    against, so this returns 0.0."""
+    if not max_depth:
+        return 0.0
+    return depth / max_depth
+
+
+def _rank_score(rank: int, max_candidates: int) -> float:
+    """`Candidate.rank` (1 = top-ranked) transformed onto the same [0,1]
+    scale as this module's other terms: 1.0 for the top-ranked candidate
+    down to 0.0 for the lowest-ranked one out of `max_candidates`. Kept
+    internal to `calibrate_confidence` since a raw rank integer is not
+    itself a probability-like quantity, unlike `step_position`/`depth_norm`
+    above, which the caller already normalizes before passing in."""
+    if max_candidates <= 1:
+        return 1.0
+    return 1.0 - (rank - 1) / (max_candidates - 1)
+
+
 def calibrate_confidence(
     model_confidence: float,
     prior: float,
     agreement: bool,
     evidence_density: float,
+    rank: int,
+    step_position: float,
+    depth_norm: float,
+    n_l1_signals: int,
+    is_fallback: bool,
     *,
+    max_candidates: int = _DEFAULT_MAX_CANDIDATES,
     a0: float = DEFAULT_A0,
     a1: float = DEFAULT_A1,
     a2: float = DEFAULT_A2,
     a3: float = DEFAULT_A3,
     a4: float = DEFAULT_A4,
+    a5: float = DEFAULT_A5,
+    a6: float = DEFAULT_A6,
+    a7: float = DEFAULT_A7,
+    a8: float = DEFAULT_A8,
+    a9: float = DEFAULT_A9,
 ) -> float:
     """`calibrated = sigmoid(a0 + a1*logit(model_conf) + a2*prior +
-    a3*agreement + a4*evidence_density)`, the formula in CLAUDE.md's "L3
-    adjudication" section. See module docstring for why the coefficients
-    are priors, not fitted values."""
+    a3*agreement + a4*evidence_density + a5*rank_score(rank) +
+    a6*step_position + a7*depth_norm + a8*n_l1_signals +
+    a9*is_fallback)`.
+
+    `step_position` and `depth_norm` are pre-normalized floats (this
+    module's own `step_position()`/`depth_norm()` functions above build
+    them from a `Step`/`Trace`); `rank` is the raw 1-based
+    `Candidate.rank` and is normalized internally by `_rank_score`, since
+    unlike the other new terms it is not already a [0,1] quantity at the
+    call site. See module docstring for the fit this formula and its
+    coefficients came from."""
     x = (
         a0
         + a1 * _logit(model_confidence)
         + a2 * prior
         + a3 * (1.0 if agreement else 0.0)
         + a4 * evidence_density
+        + a5 * _rank_score(rank, max_candidates)
+        + a6 * step_position
+        + a7 * depth_norm
+        + a8 * n_l1_signals
+        + a9 * (1.0 if is_fallback else 0.0)
     )
     return _sigmoid(x)
 

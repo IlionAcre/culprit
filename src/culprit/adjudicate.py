@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from pydantic import BaseModel, Field, ValidationError
 
-from culprit.confidence import agrees_with_l1, calibrate_confidence, cite_check
+from culprit.confidence import agrees_with_l1, calibrate_confidence, cite_check, depth_norm, step_position
 from culprit.context_window import ContextPacket, build_context_packet
 from culprit.llm import CallFn
 from culprit.prompts import build_prompt
@@ -98,9 +98,22 @@ def _sentinel_adjudication(candidate: Candidate, model: str, error: str) -> Adju
     )
 
 
+def _candidate_step_features(candidate: Candidate, trace: Trace, steps: list[Step]) -> tuple[float, float]:
+    """Derives the two new calibration terms that need trace-wide context
+    (`confidence.step_position`/`confidence.depth_norm` only need a single
+    step's normalized value, not the lookup) - `rank` and `n_l1_signals`
+    come straight off `Candidate` and need no derivation here."""
+    step_count = trace.step_count if trace is not None and trace.step_count else len(steps)
+    step_lookup = {s.step_index: s for s in steps}
+    step = step_lookup.get(candidate.step_index)
+    depth = step.depth if step is not None else 0
+    max_depth = max((s.depth for s in steps), default=0)
+    return step_position(candidate.step_index, step_count), depth_norm(depth, max_depth)
+
+
 def _adjudication_from_verdict(
-    candidate: Candidate, packet: ContextPacket, verdict: _AdjudicationVerdict,
-    model: str, cost_usd: float | None,
+    candidate: Candidate, trace: Trace, steps: list[Step], packet: ContextPacket,
+    verdict: _AdjudicationVerdict, model: str, cost_usd: float | None,
     prompt_tokens: int | None, completion_tokens: int | None,
 ) -> Adjudication:
     """Builds a non-abstained Adjudication from the model's parsed verdict.
@@ -109,7 +122,12 @@ def _adjudication_from_verdict(
     (INTEGRATION_ITEMS.md backlog item 6)."""
     density = cite_check(verdict.cited_step_indices, packet.visible_step_indices)
     agreement = agrees_with_l1([s.category for s in candidate.signals], verdict.failure_class.value)
-    calibrated = calibrate_confidence(verdict.confidence, candidate.prior, agreement, density)
+    position, depth = _candidate_step_features(candidate, trace, steps)
+    calibrated = calibrate_confidence(
+        verdict.confidence, candidate.prior, agreement, density,
+        candidate.rank, position, depth, len(candidate.signals),
+        candidate.source == "fallback",
+    )
     return Adjudication(
         step_index=candidate.step_index,
         span_id=candidate.span_id,
@@ -146,7 +164,7 @@ def _process_candidate(
         raw_output, _latency_ms, cost_usd, prompt_tokens, completion_tokens = call_fn(model, prompt)
         verdict = _parse_verdict(raw_output)
         return _adjudication_from_verdict(
-            candidate, packet, verdict, model, cost_usd, prompt_tokens, completion_tokens,
+            candidate, trace, steps, packet, verdict, model, cost_usd, prompt_tokens, completion_tokens,
         )
     except Exception as e:  # noqa: BLE001 - deliberately broad, see docstring
         return _sentinel_adjudication(candidate, model, error=f"{type(e).__name__}: {e}")

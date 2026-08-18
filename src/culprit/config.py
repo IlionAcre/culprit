@@ -35,7 +35,11 @@ class CulpritConfig:
     redis_url: str = "redis://localhost:6379/0"
     model: str = "gemini/gemini-2.5-flash-lite"
     max_candidates: int = 5
-    min_confidence: float = 0.55
+    # 0.15: matches confidence.py's _DEFAULT_MIN_CONFIDENCE, chosen from the
+    # 2026-08-17 richer-feature refit's precision-at-threshold table (see
+    # confidence.py's module docstring and CLAUDE.md's "L3 adjudication"
+    # section for the numbers this floor was picked from).
+    min_confidence: float = 0.15
     ambiguity_margin: float = 0.08
     max_workers: int = 4
     min_reference_runs: int = 3

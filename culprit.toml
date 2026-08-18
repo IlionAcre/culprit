@@ -16,7 +16,7 @@
 
 # L3 candidate merge and abstention gates
 # max_candidates = 5
-# min_confidence = 0.55
+# min_confidence = 0.15
 # ambiguity_margin = 0.08
 
 # Fan-out width for ThreadPoolExecutor(...).map() calls (L3 adjudication,
