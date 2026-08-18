@@ -325,110 +325,98 @@ problem as detecting an anomalous step sequence in an agent trace.
 
 - **Three independent abstention gates**: model self-abstention
   (`is_root_cause: false` is presented as a correct, expected answer, not a
-  refusal to be avoided), a confidence floor (0.55 calibrated), and an
-  ambiguity margin (top two candidates within 0.08 and different failure
-  classes abstains with both surfaced). A coin flip presented as a verdict
-  is worse than no verdict. This whole discipline mirrors Uber's **"Project
-  RADAR: Intelligent Early Fraud Detection with Humans in the Loop"** (2022):
-  presenting ranked suspects to a human rather than a verdict.
+  refusal to be avoided), a confidence floor (0.15 calibrated, see below for
+  where that number comes from and why it changed from the original 0.55),
+  and an ambiguity margin (top two candidates within 0.08 and different
+  failure classes abstains with both surfaced). A coin flip presented as a
+  verdict is worse than no verdict. This whole discipline mirrors Uber's
+  **"Project RADAR: Intelligent Early Fraud Detection with Humans in the
+  Loop"** (2022): presenting ranked suspects to a human rather than a
+  verdict.
 
-- **The coefficients in `src/culprit/confidence.py` were hand-set priors
-  through 2026-08-17, then fitted by logistic regression against real
-  labeled data that same day (Integration task I7).** `bench_score.py` has
-  reported Brier, ECE, and reliability points from day one specifically so
-  this could happen once labeled data existed. The fit below is real and
-  cross-validated, not a claim in excess of what was measured - see the
-  numbers before treating this system as "calibrated" in any stronger sense
-  than what is documented here.
-  - **A fit was attempted 2026-08-17 (I7) against I5's scored TRAIL/Who&When
-    cases and initially found there was nothing to fit against: the I5
-    benchmark path never persisted the data it would require.**
-    `bench.py::run_benchmark` called `pipeline.diagnose` directly and only
-    ever persisted the trace itself via `write_trace`;
-    `jobs.diagnose_trace_job` was the only caller of
-    `store_diagnoses.write_diagnosis`, a path `culprit bench` never went
-    through, and `benchmark_cases` had no writer anywhere in the codebase.
-    Querying live Postgres confirmed this empirically: `diagnoses`,
-    `adjudications`, `signals`, `divergences`, `benchmark_cases` all read
-    back 0 rows.
-  - **That persistence gap was fixed later the same day.**
-    `run_benchmark` now calls `store_diagnoses.write_diagnosis` per trace
-    (mirroring `jobs.diagnose_trace_job`'s pattern) and a new
-    `store_benchmarks.write_benchmark_cases` persists each trace's
-    ground-truth `BenchmarkCase` rows, both wired in right after the
-    existing `write_trace` call, reusing `bench.py`'s existing pooled
-    `conn_fn`/`recycle_fn`. Tests in `tests/test_bench.py` prove the calls
-    happen, fully offline. The harness was then re-run for real (no
-    `--ablate l2`, to save spend) - 129 TRAIL traces / 763 cases and 184
-    Who&When traces/cases, `gemini/gemini-2.5-flash-lite`, ~$0.118 total -
-    and this time the writes landed: 313 new `diagnoses` rows, 947
-    `benchmark_cases` rows, 466 `adjudications` rows.
-    Headline numbers moved slightly from I5's original run (real-LLM
-    nondeterminism, not a regression): TRAIL exact accuracy 0.025 -> 0.014,
-    candidate_recall@5 0.065 -> 0.078, earliness_error +1.689 -> -0.015;
-    Who&When abstention 0.152 -> 0.130, candidate_recall@5 0.038 -> 0.037.
-    Joint accuracy stayed 0.000 on both. Raw run log:
-    `data/benchmarks/results/bench_runs_20260817T210006Z.txt`.
-  - **The fit itself, real and non-degenerate.** Per-candidate rows (one per
-    non-abstained `Adjudication`, not one per trace) were built by joining
-    `diagnoses`/`adjudications` to `benchmark_cases` on `trace_id`: 447
-    usable rows, 46 positive (10.3%) where the candidate's `step_index`
-    matched a trace's ground-truth step - imbalanced but not the
-    single-class degenerate case the class-balance risk warned about.
-    `prior`/`agreement`/`evidence_density` aren't stored on `adjudications`,
-    so each row's inputs were reconstructed from persisted
-    `signals`+`steps`+`spans`+the persisted `cited_step_indices`, calling
-    the real `candidates.py` prior formula and `context_window.build_context_packet`
-    against the same persisted trace data L3 used originally; reconstruction
-    was verified exact (0/447 mismatches against the persisted
-    `calibrated_confidence`, which the old hand-set coefficients produced)
-    before trusting the fit. `sklearn.linear_model.LogisticRegression`
-    against `(logit(model_confidence), prior, agreement, evidence_density)`
-    gave `a0=-2.6065 a1=-0.0285 a2=0.7678 a3=0.6492 a4=0.0053`. 5-fold
-    stratified cross-validation (predicted probabilities out-of-fold) gave
-    Brier 0.0909, closely tracking the in-sample Brier of 0.0902 rather than
-    diverging - the signal generalizes, it isn't memorizing 447 rows. Before
-    (hand-set priors, same 447-row population): Brier 0.8777, ECE 0.8861.
-    After (fitted): Brier 0.0902, ECE 0.0035. These before/after numbers are
-    **not** the same population as the 0.957/0.945 Brier reported in
-    "Measured results so far" below - that number scores only each trace's
-    one committed (post-abstention) winner, while this fit scores every
-    non-abstained adjudicated candidate, winner or not, which is why the
-    "before" number here (0.878) differs so much from 0.957. `DEFAULT_A0`
-    through `DEFAULT_A4` in `confidence.py` now hold these fitted values;
-    `tests/test_confidence.py` pins them.
-  - **The fit's real finding: cite-check and raw model confidence turned out
-    not to matter, prior and L1 agreement do.** The hand-set priors assumed
-    `a4` (cite-check) would dominate ("a rationale citing step 47 when only
-    12-16 were shown is direct evidence of confabulation"); the fit found
-    `a4=0.0053`, near zero. `a1` (the model's own raw confidence) came back
-    near zero too (and slightly negative), matching the earlier measured
-    finding that raw confidence saturates near 1.0 regardless of actual
-    correctness. `a2` (prior, i.e. L1 detector severity) and `a3` (L1
-    agreement) turned out to carry nearly all the real predictive signal:
-    whether a deterministic detector already flagged the step, and whether
-    L3's chosen failure class matches that detector's category hint, matters
-    far more than anything the LLM itself reports about its own certainty
-    or citations. This is a genuinely new, measured finding, not a
-    confirmation of the original hand-set assumption.
-  - **Open issue found while fixing `tests/test_pipeline.py` post-I7 (not
-    yet resolved, needs a maintainer decision): the fitted coefficients'
-    output ceiling now sits below the 0.55 confidence floor.** A brute-force
-    scan of `calibrate_confidence` over its whole realistic input domain
-    (`prior` in [0,1], `agreement` in {True, False}, `evidence_density` in
-    [0,1], `model_confidence` in (0,1)) tops out around 0.28-0.29, even at
-    the strongest inputs this pipeline can ever construct (`prior=1.0` via
-    the co-location bonus, `agreement=True`, `evidence_density=1.0`, high
-    model confidence) - versus up to 0.999 under the old hand-set
-    coefficients for the identical inputs. That means `select_diagnosis`'s
-    confidence-floor gate now abstains unconditionally on every trace,
-    regardless of evidence strength, until either the floor or the fit is
-    revisited; this was left unfixed here per this task's explicit
-    guardrail against touching `DEFAULT_A0`-`DEFAULT_A4` or the 0.55 floor,
-    and `test_diagnose_wires_l3_and_correctly_abstains_below_the_fitted_confidence_ceiling`
-    (renamed from `..._and_surfaces_a_committed_root_cause`) now asserts
-    the correct current (abstained) behavior instead of pinning the
-    no-longer-reachable non-abstained one.
+- **Confidence calibration, current state (third revision, 2026-08-17):
+  `calibrate_confidence()` fits nine features by logistic regression, not
+  four, and not hand-set priors.** The formula is `sigmoid(a0 +
+  a1*logit(model_confidence) + a2*prior + a3*agreement +
+  a4*evidence_density + a5*rank_score(rank) + a6*step_position +
+  a7*depth_norm + a8*n_l1_signals + a9*is_fallback)`. `rank_score` maps
+  `Candidate.rank` onto [0,1] (1.0 for the top-ranked candidate);
+  `step_position` and `depth_norm` are the candidate's step position and
+  nesting depth each normalized against the whole trace; `n_l1_signals` is
+  how many L1 detectors fired on that step; `is_fallback` flags the
+  zero-evidence synthetic candidate `candidates.py` emits when nothing else
+  fired. Current coefficients: `a0=-4.3970 a1=-0.0482 a2=0.2273 a3=-0.0892
+  a4=0.0020 a5=0.1206 a6=2.1086 a7=1.1989 a8=0.2925 a9=-1.5935`
+  (`DEFAULT_A0`-`DEFAULT_A9` in `confidence.py`, pinned by
+  `tests/test_confidence.py`). The confidence floor (`_DEFAULT_MIN_CONFIDENCE`,
+  also `CulpritConfig.min_confidence`) is **0.15**, down from 0.55.
+  - **Why 0.15, from a precision-at-threshold table on the same 447-row
+    population the model is fit on.** At threshold 0.15: 122 candidates
+    committed (well over the ~15-count trustworthy floor), 23.8% precision
+    (out-of-fold, averaged over 5 CV seeds) against a 10.3% unconditional
+    base rate - roughly 2.3x lift, versus 1.4-1.8x at the thresholds below
+    it. Raising the floor further (0.18: 41.7% precision) trades most of
+    the remaining coverage (13.4% vs 27.3%) for a smaller, more volatile
+    committed set; 0.15 was chosen as the lowest threshold that is both
+    trustworthy and a real, not marginal, improvement over guessing.
+  - **Production-feasibility constraint: no dataset-identity feature ships,
+    even though one measured well in research.** A same-day investigation
+    (scripts left uncommitted under `data/benchmarks/results/`,
+    `richer_features_20260817.py` and `refit_richer_features_20260817.py`)
+    found that adding `rank`/`step_position`/`depth_norm`/`n_l1_signals`
+    lifts out-of-fold AUC from ~0.61 (the original 4-feature model) to
+    ~0.74, and, critically, this lift **survives on TRAIL-only data alone**
+    (0.547 -> 0.755 AUC per-dataset), which rules out the richer model
+    merely learning "which benchmark is this" via a `dataset_trail`/
+    `source_fallback` confound - the researcher explicitly tested a
+    `dataset_trail` feature (it measured even higher, ~0.767 combined AUC)
+    and excluded it anyway, because a real ingested production trace has no
+    such label to read. `is_fallback` (`Candidate.source == "fallback"`) is
+    a genuinely different feature from the dataset flag - real, available
+    at inference time on production traffic - and was kept after refitting
+    confirmed it improves AUC (~0.715 -> ~0.739) and precision on this
+    population.
+  - **How this state was reached.** Hand-set priors
+    (`a0=0.0, a1=1.0, a2=0.5, a3=0.3, a4=1.5`) were replaced 2026-08-17 by
+    I7's first fit: logistic regression on 447 real adjudication rows (46
+    positive) using only `model_confidence`, `prior`, `agreement`, and
+    `evidence_density`, giving `a0=-2.6065 a1=-0.0285 a2=0.7678 a3=0.6492
+    a4=0.0053` (Brier 0.878 -> 0.090, ECE 0.886 -> 0.004 on that
+    population; 5-fold CV Brier 0.0909 tracked in-sample 0.0902, not
+    degenerate). That fit's real finding was that cite-check and raw model
+    confidence turned out not to matter, while prior and L1 agreement
+    carried nearly all the signal - the opposite of the hand-set
+    assumption. But a brute-force scan of that formula's output over its
+    whole realistic input domain topped out around 0.28-0.29, permanently
+    below the 0.55 floor in place at the time, so `select_diagnosis`
+    abstained on every trace regardless of evidence strength - discovered
+    while fixing `tests/test_pipeline.py` post-I7 and left as an open issue
+    pending a maintainer decision, since editing the coefficients or floor
+    was out of scope for that task. The richer-feature refit documented
+    above is that decision: it fits ten coefficients on the wider feature
+    set (raising the ceiling to ~0.83-0.91 over the realistic input domain)
+    and picks a new floor from measured precision, closing the ceiling-vs-
+    floor gap instead of only re-deriving the same four terms.
+    `tests/test_pipeline.py`'s
+    `test_diagnose_wires_l3_and_commits_a_well_supported_root_cause`
+    (through two prior names, `..._and_surfaces_a_committed_root_cause`
+    then `..._and_correctly_abstains_below_the_fitted_confidence_ceiling`)
+    now asserts a correct commit again under a well-supported synthetic
+    scenario, verified against the actual coefficients rather than assumed.
+  - **What remains thin versus solid.** The whole fit, at every stage, rests
+    on the same 447 rows and 46 positives - genuinely small, and the
+    biggest reason to treat any of these coefficients as provisional. The
+    TRAIL-only AUC replication is the strongest evidence the richer
+    features generalize rather than overfitting 447 rows; the combined-
+    population AUC number alone would be weaker evidence on its own.
+  - **This refit does not touch the dominant unsolved problem.** The same
+    research pass measured that 85.9% of traces (269 of 313 scored
+    benchmark diagnoses) never have the correct step in their L3 candidate
+    shortlist at all - a structural ceiling in L1/L2 candidate recall that
+    no L3 calibration change, including this one, can cross. Calibrating
+    confidence better on the 14.1% of traces where the right candidate is
+    even reachable is a real but secondary improvement; candidate recall is
+    still the number that matters most and is still unaddressed.
 
 ### L5 clustering
 
@@ -894,15 +882,21 @@ benchmarks among them.
   traces / 763 annotated errors and 184 logs, respectively), not the
   hand-written 3-record fixtures used to build the adapters. See "Measured
   results so far" above for the numbers; not duplicated here.
-- **Confidence coefficients are now fitted, not hand-set.** `bench.py` was
-  wired to persist diagnoses and benchmark cases, the harness was re-run, and
-  `confidence.py`'s `DEFAULT_A0`-`DEFAULT_A4` were fit by logistic regression
-  against 447 real adjudication rows and cross-validated. See "L3
-  adjudication" above for the full fit, its sample size, and the honest
-  caveat about what population it does and doesn't generalize to. Do not
-  describe the *system's end-to-end accuracy* as calibrated beyond what this
-  fit measured - only the confidence-score mapping was fit, not a claim that
-  the pipeline finds the right answer more often.
+- **Confidence coefficients are now fitted, not hand-set - twice over.**
+  `bench.py` was wired to persist diagnoses and benchmark cases, the
+  harness was re-run, and `confidence.py`'s coefficients were fit by
+  logistic regression against 447 real adjudication rows and cross-
+  validated: first I7's 4-feature fit (`DEFAULT_A0`-`DEFAULT_A4`), then the
+  same day's richer-feature refit (`DEFAULT_A0`-`DEFAULT_A9`) that resolved
+  the ceiling-below-floor issue the first fit left behind. See "L3
+  adjudication" above for the full history, the fit's sample size, and the
+  honest caveat about what population it does and doesn't generalize to. Do
+  not describe the *system's end-to-end accuracy* as calibrated beyond what
+  this fit measured - only the confidence-score mapping was fit, not a
+  claim that the pipeline finds the right answer more often, and the
+  85.9%-of-traces candidate-recall ceiling (see "L3 adjudication") remains
+  the dominant unsolved problem regardless of how well confidence is
+  calibrated on the traces that do reach L3 with a correct candidate.
 
 **Still unverified:**
 
@@ -915,9 +909,12 @@ benchmarks among them.
 
 ## Status
 
-Phase 2 closeout landed on `main` (current HEAD `cc6296f`); there is no
-`phase-2-closeout` branch. Integration items I1-I7 are done: I7 (calibration)
-fixed the benchmark harness's missing persistence, re-ran it against real
-TRAIL/Who&When data, and fit `confidence.py`'s coefficients against the
-result. See `AI_docs/PHASES.md` for the authoritative resume point, the
-Phase 1 workstream table, and the Phase 2 integration checklist.
+Phase 2 closeout landed on `main`. Integration items I1-I7 are done: I7
+(calibration) fixed the benchmark harness's missing persistence, re-ran it
+against real TRAIL/Who&When data, and fit `confidence.py`'s coefficients
+against the result. A same-day follow-up (I7b in `AI_docs/PHASES.md`)
+refit those coefficients again on a richer, production-viable feature set
+after I7's fit turned out to have an unreachable confidence floor; see
+"L3 adjudication" above for the current state and full history. See
+`AI_docs/PHASES.md` for the authoritative resume point, the Phase 1
+workstream table, and the Phase 2 integration checklist.
