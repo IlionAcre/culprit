@@ -636,10 +636,36 @@ match the other two fixtures' step sequence.
 
 `culprit worker` launches an RQ worker, and RQ forks the process with
 `os.fork`. That attribute does not exist on Windows, so the command fails with
-`AttributeError: module 'os' has no attribute 'fork'`. The worker path has not
-been verified; run it on Linux or WSL. The inline execution path used for the
-2026-08-16 e2e does not prove the worker, but it does prove the job functions
-against the real Postgres and Redis services.
+`AttributeError: module 'os' has no attribute 'fork'`. Run it on Linux or WSL.
+
+**Verified 2026-08-18 on Ubuntu-24.04 WSL2**, against a native Linux clone
+(`~/culprit-verify`, `uv sync --all-groups`) pointed at the same live
+Postgres/Redis podman containers this project already uses, reached from WSL2
+via the host's port forwarding. `uv run culprit worker` started cleanly, no
+`AttributeError`, and logged `*** Listening on culprit...`. A real failure
+trace, `tests/fixtures/otlp/raw_upload_sample.json` (the refund agent that
+gets an empty tool result and reports success anyway), was ingested with
+`uv run culprit ingest` (trace `raw-upload-7f2c19`), then diagnosed with
+`uv run culprit diagnose raw-upload-7f2c19`, which enqueued job
+`f8e43670-9e20-4d0d-88dc-856bdce44fd0` onto the real Redis queue. The
+background worker's log shows it actually picked up and processed that exact
+job, not merely idled:
+
+```
+14:41:08 culprit: culprit.jobs.diagnose_trace_job('raw-upload-7f2c19') (f8e43670-9e20-4d0d-88dc-856bdce44fd0)
+14:41:11 Successfully completed culprit.jobs.diagnose_trace_job('raw-upload-7f2c19') job in 0:00:02.768743s on worker 2bff860bbd66448793cae9de2302e657
+14:41:11 culprit: Job OK (f8e43670-9e20-4d0d-88dc-856bdce44fd0)
+```
+
+`uv run culprit job-status f8e43670-9e20-4d0d-88dc-856bdce44fd0` reported
+`FINISHED` with result `12f22cd0-5d69-4286-bfd0-10ba201f0d6e`, and
+`uv run culprit show raw-upload-7f2c19` read that diagnosis back:
+step=2, class=`silent_empty_result_misread`, confidence=0.16,
+abstained=False - the correct step and failure class for this fixture. This
+closes both the worker-path gap and the failure-path-through-CLI+DB gap in
+one run; see `AI_docs/INTEGRATION_ITEMS.md`'s "Not verified anywhere yet"
+section for the same detail cross-referenced there. The worker was killed
+cleanly afterward; nothing was left running.
 
 ## Guardrails - don't do these without asking first
 
@@ -898,14 +924,12 @@ benchmarks among them.
   the dominant unsolved problem regardless of how well confidence is
   calibrated on the traces that do reach L3 with a correct candidate.
 
-**Still unverified:**
+**Verified 2026-08-18:**
 
-- **Failure path through the full CLI+DB pipeline.** A synthetic failure was
-  adjudicated in-process in the live smoke test, and the clean OTLP fixture ran
-  through the CLI, but a real failure trace has not yet been ingested,
-  diagnosed, persisted, and read back via `culprit show`.
-- **Queued-worker path.** See the known gotcha below: `culprit worker` cannot run
-  on Windows.
+- **Failure path through the full CLI+DB pipeline, and the queued-worker
+  path, together.** See "Known gotcha: `culprit worker` does not run on
+  Windows" below for the full detail (trace id, job id, worker log excerpt,
+  and the `culprit show` output). Both gaps closed in one WSL2 session.
 
 ## Status
 
