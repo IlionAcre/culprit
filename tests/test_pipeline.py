@@ -191,34 +191,32 @@ def _verdict_call_fn(step_index: int):
     return _call
 
 
-def test_diagnose_wires_l3_and_correctly_abstains_below_the_fitted_confidence_ceiling(monkeypatch):
+def test_diagnose_wires_l3_and_commits_a_well_supported_root_cause(monkeypatch):
     """End-to-end proof that L1's signal, L2's clean-empty result, and L3's
     adjudication are really chained through merge_candidates -> adjudicate ->
     select_diagnosis.
 
-    This test used to assert `abstained is False` (a committed root cause).
-    That assumption predated I7's fit of `DEFAULT_A0`..`DEFAULT_A4`
-    (confidence.py) against 447 real adjudication rows. Investigating the
-    post-I7 regression here found this is not a synthetic-setup shortfall:
-    a brute-force scan of `calibrate_confidence` over its entire realistic
-    input domain (prior in [0,1], agreement in {True, False}, evidence_density
-    in [0,1], model_confidence in (0,1)) tops out around 0.28-0.29 under the
-    fitted coefficients - including the maximum this pipeline can construct,
-    prior=1.0 via the co-location bonus, agreement=True, density=1.0, and a
-    high self-reported model confidence. That ceiling sits permanently below
-    `select_diagnosis`'s 0.55 confidence floor, so gate 2 now abstains on
-    every trace regardless of evidence strength. No injected fault, mocked
-    L1 signal, or `_verdict_call_fn` response can change that outcome without
-    editing `confidence.py` itself, which is out of scope here (see
-    CLAUDE.md's "L3 adjudication" section for the fuller writeup and the
-    open question this leaves for a maintainer). So this test proves the
-    wiring is real - L1's signal becomes a candidate, L3 adjudicates it and
-    self-reports it as the root cause with the right failure class - and
-    asserts the correct, current outcome (abstained, citing the confidence
-    floor) rather than pinning a result production code cannot produce.
+    Third revision of this test's expected outcome (see CLAUDE.md's "L3
+    adjudication" section for the full history). It originally asserted a
+    commit; I7's 4-feature fit found the confidence ceiling (~0.29) sat
+    below the 0.55 floor, so it was rewritten to assert unconditional
+    abstention, correctly, for that model. The 2026-08-17 richer-feature
+    refit changed both sides of that comparison: the floor dropped to 0.15
+    (chosen from a precision-at-threshold table, not restored to its old
+    value) and the model's ceiling rose to ~0.83-0.91 over the realistic
+    input domain (ranked/positioned/deep/well-corroborated candidates can
+    now clear the floor). This scenario - the same injected fault and synth
+    seed as before, moved later in the trace (`at_step=7` instead of `1`,
+    `step_position` normalizes higher for a later step) - now genuinely
+    clears it: prior=0.6, agreement=True, evidence_density=1.0, rank=1
+    (only candidate), step_position≈0.89, depth_norm=1.0, n_l1_signals=1,
+    is_fallback=False produces calibrated_confidence≈0.342, comfortably
+    above 0.15. This was verified by direct computation before being
+    written here, not guessed at - see this task's refit script under
+    `data/benchmarks/results/` for the same feature-derivation logic.
     """
     base = successful_run(seed=8)
-    run, step_index = inject(base, "empty_tool_result", at_step=1)
+    run, step_index = inject(base, "empty_tool_result", at_step=7)
 
     monkeypatch.setattr(
         "culprit.pipeline.read_trace", lambda conn_fn, trace_id: (run.trace, run.spans, run.steps)
@@ -238,8 +236,11 @@ def test_diagnose_wires_l3_and_correctly_abstains_below_the_fitted_confidence_ce
         and a.failure_class == FailureClass.SILENT_EMPTY_RESULT_MISREAD.value
         for a in diagnosis.adjudications
     )
-    assert diagnosis.abstained is True
-    assert diagnosis.abstain_reason is not None and "confidence" in diagnosis.abstain_reason
+    assert diagnosis.abstained is False
+    assert diagnosis.abstain_reason is None
+    assert diagnosis.root_cause_step_index == step_index
+    assert diagnosis.failure_class == FailureClass.SILENT_EMPTY_RESULT_MISREAD.value
+    assert 0.15 <= diagnosis.calibrated_confidence <= 1.0
 
 
 def test_diagnose_degrades_l3_instead_of_crashing_when_merge_candidates_raises(monkeypatch):

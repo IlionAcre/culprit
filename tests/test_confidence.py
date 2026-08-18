@@ -6,10 +6,17 @@ from culprit.confidence import (
     DEFAULT_A2,
     DEFAULT_A3,
     DEFAULT_A4,
+    DEFAULT_A5,
+    DEFAULT_A6,
+    DEFAULT_A7,
+    DEFAULT_A8,
+    DEFAULT_A9,
     agrees_with_l1,
     calibrate_confidence,
     cite_check,
+    depth_norm,
     select_diagnosis,
+    step_position,
 )
 from culprit.signals import Adjudication
 
@@ -27,31 +34,37 @@ def _adjudication(
     )
 
 
-# --- fitted default coefficients (Integration task I7, 2026-08-17) --------
+# --- fitted default coefficients (richer-feature refit, 2026-08-17) -------
 
-def test_default_coefficients_are_the_2026_08_17_fitted_values():
-    """Fitted by logistic regression against 447 real TRAIL/Who&When
-    adjudication rows, 46 positive (CLAUDE.md's "L3 adjudication" section
-    has the full fit: sample size, cross-validation check, before/after
-    Brier/ECE). Regression-pins the values so a future edit to
-    confidence.py cannot silently drift back toward the old hand-set priors
-    (a0=0.0, a1=1.0, a2=0.5, a3=0.3, a4=1.5) without a test failure calling
-    it out."""
-    assert DEFAULT_A0 == pytest.approx(-2.6065)
-    assert DEFAULT_A1 == pytest.approx(-0.0285)
-    assert DEFAULT_A2 == pytest.approx(0.7678)
-    assert DEFAULT_A3 == pytest.approx(0.6492)
-    assert DEFAULT_A4 == pytest.approx(0.0053)
+def test_default_coefficients_are_the_richer_feature_refit_values():
+    """Fitted by logistic regression against the same 447-row TRAIL/Who&When
+    population as I7 (46 positive), on the richer production-viable feature
+    set (CLAUDE.md's "L3 adjudication" section has the full fit: sample
+    size, cross-validation AUC, and the precision-at-threshold table the
+    floor was chosen from). Regression-pins the values so a future edit
+    cannot silently drift without a test failure calling it out."""
+    assert DEFAULT_A0 == pytest.approx(-4.3970)
+    assert DEFAULT_A1 == pytest.approx(-0.0482)
+    assert DEFAULT_A2 == pytest.approx(0.2273)
+    assert DEFAULT_A3 == pytest.approx(-0.0892)
+    assert DEFAULT_A4 == pytest.approx(0.0020)
+    assert DEFAULT_A5 == pytest.approx(0.1206)
+    assert DEFAULT_A6 == pytest.approx(2.1086)
+    assert DEFAULT_A7 == pytest.approx(1.1989)
+    assert DEFAULT_A8 == pytest.approx(0.2925)
+    assert DEFAULT_A9 == pytest.approx(-1.5935)
 
 
-def test_default_coefficients_now_weight_prior_and_agreement_over_raw_confidence_and_cite_check():
-    """The fit's headline finding, the opposite of the hand-set prior's
-    assumption that cite-check (a4) would dominate: raw model self-reported
-    confidence (a1) and cite-check evidence density (a4) both came back
-    near zero, while prior (a2, detector severity) and L1 agreement (a3)
-    carry nearly all the real predictive signal."""
-    assert abs(DEFAULT_A2) > abs(DEFAULT_A1)
-    assert abs(DEFAULT_A3) > abs(DEFAULT_A4)
+def test_default_coefficients_now_weight_step_position_and_depth_over_the_original_four_features():
+    """The richer refit's headline finding: once rank, step position, step
+    depth, and L1 signal count are in the model, they carry more weight
+    than the original four features - including agreement (a3), which came
+    back small and slightly negative here, a genuinely different (and less
+    flattering) result than I7's fit, where agreement was one of the two
+    dominant terms."""
+    assert abs(DEFAULT_A6) > abs(DEFAULT_A2)
+    assert abs(DEFAULT_A6) > abs(DEFAULT_A3)
+    assert abs(DEFAULT_A7) > abs(DEFAULT_A3)
 
 
 # --- cite_check --------------------------------------------------------
@@ -77,26 +90,88 @@ def test_cite_check_returns_zero_for_an_empty_citation_list():
 
 
 # --- calibrate_confidence -----------------------------------------------
+# Fixed baseline args for the new terms so each test below isolates the one
+# feature it names. rank=1 (top), step_position=0.5, depth_norm=0.3,
+# n_l1_signals=1, is_fallback=False are all mid-range/typical values.
+
+_BASE_KW = dict(rank=1, step_position=0.5, depth_norm=0.3, n_l1_signals=1, is_fallback=False)
+
 
 def test_calibrated_confidence_increases_with_higher_evidence_density():
-    low = calibrate_confidence(0.7, prior=0.5, agreement=False, evidence_density=0.0)
-    high = calibrate_confidence(0.7, prior=0.5, agreement=False, evidence_density=1.0)
+    low = calibrate_confidence(0.7, 0.5, False, 0.0, **_BASE_KW)
+    high = calibrate_confidence(0.7, 0.5, False, 1.0, **_BASE_KW)
 
     assert high > low
 
 
-def test_calibrated_confidence_increases_with_agreement():
-    without = calibrate_confidence(0.7, prior=0.5, agreement=False, evidence_density=0.5)
-    with_agreement = calibrate_confidence(0.7, prior=0.5, agreement=True, evidence_density=0.5)
+def test_calibrated_confidence_no_longer_increases_with_agreement_under_the_richer_model():
+    """The richer refit's a3 (agreement) came back small and slightly
+    negative (see the coefficient tests above) - the opposite of I7's fit,
+    where agreement was one of the two dominant terms. Once rank, step
+    position, depth, and L1 signal count are in the model, matching an L1
+    category hint no longer independently helps; this pins that this is a
+    real, measured change in direction, not an oversight."""
+    without = calibrate_confidence(0.7, 0.5, False, 0.5, **_BASE_KW)
+    with_agreement = calibrate_confidence(0.7, 0.5, True, 0.5, **_BASE_KW)
 
-    assert with_agreement > without
+    assert with_agreement < without
+
+
+def test_calibrated_confidence_increases_with_a_better_rank():
+    worse_rank = calibrate_confidence(0.7, 0.5, False, 0.5, rank=5, step_position=0.5,
+                                       depth_norm=0.3, n_l1_signals=1, is_fallback=False)
+    better_rank = calibrate_confidence(0.7, 0.5, False, 0.5, rank=1, step_position=0.5,
+                                        depth_norm=0.3, n_l1_signals=1, is_fallback=False)
+
+    assert better_rank > worse_rank
+
+
+def test_calibrated_confidence_increases_with_later_step_position():
+    earlier = calibrate_confidence(0.7, 0.5, False, 0.5, rank=1, step_position=0.0,
+                                    depth_norm=0.3, n_l1_signals=1, is_fallback=False)
+    later = calibrate_confidence(0.7, 0.5, False, 0.5, rank=1, step_position=1.0,
+                                  depth_norm=0.3, n_l1_signals=1, is_fallback=False)
+
+    assert later > earlier
+
+
+def test_calibrated_confidence_increases_with_step_depth():
+    shallow = calibrate_confidence(0.7, 0.5, False, 0.5, rank=1, step_position=0.5,
+                                    depth_norm=0.0, n_l1_signals=1, is_fallback=False)
+    deep = calibrate_confidence(0.7, 0.5, False, 0.5, rank=1, step_position=0.5,
+                                 depth_norm=1.0, n_l1_signals=1, is_fallback=False)
+
+    assert deep > shallow
+
+
+def test_calibrated_confidence_increases_with_more_l1_signals():
+    fewer = calibrate_confidence(0.7, 0.5, False, 0.5, rank=1, step_position=0.5,
+                                  depth_norm=0.3, n_l1_signals=0, is_fallback=False)
+    more = calibrate_confidence(0.7, 0.5, False, 0.5, rank=1, step_position=0.5,
+                                 depth_norm=0.3, n_l1_signals=5, is_fallback=False)
+
+    assert more > fewer
+
+
+def test_calibrated_confidence_decreases_for_a_fallback_candidate():
+    """A fallback candidate carries zero real evidence by construction
+    (candidates.py: no L1 signal, no L2 divergence, prior=0.0) - the fit
+    found this is worth flagging on its own, distinctly from prior alone."""
+    real = calibrate_confidence(0.7, 0.5, False, 0.5, rank=1, step_position=0.5,
+                                 depth_norm=0.3, n_l1_signals=1, is_fallback=False)
+    fallback = calibrate_confidence(0.7, 0.5, False, 0.5, rank=1, step_position=0.5,
+                                     depth_norm=0.3, n_l1_signals=1, is_fallback=True)
+
+    assert fallback < real
 
 
 def test_calibrate_confidence_never_raises_at_model_confidence_boundaries():
     """A model reporting exactly 0.0 or 1.0 confidence (some models saturate)
     must not blow up the logit transform at the domain edge."""
-    low = calibrate_confidence(0.0, prior=0.0, agreement=False, evidence_density=0.0)
-    high = calibrate_confidence(1.0, prior=1.0, agreement=True, evidence_density=1.0)
+    low = calibrate_confidence(0.0, 0.0, False, 0.0, rank=5, step_position=0.0,
+                                depth_norm=0.0, n_l1_signals=0, is_fallback=True)
+    high = calibrate_confidence(1.0, 1.0, True, 1.0, rank=1, step_position=1.0,
+                                 depth_norm=1.0, n_l1_signals=5, is_fallback=False)
 
     assert 0.0 <= low <= 1.0
     assert 0.0 <= high <= 1.0
@@ -105,8 +180,34 @@ def test_calibrate_confidence_never_raises_at_model_confidence_boundaries():
 
 def test_calibrate_confidence_stays_within_unit_interval():
     for conf in (0.1, 0.4, 0.6, 0.9):
-        value = calibrate_confidence(conf, prior=0.9, agreement=True, evidence_density=1.0)
+        value = calibrate_confidence(conf, 0.9, True, 1.0, **_BASE_KW)
         assert 0.0 <= value <= 1.0
+
+
+# --- step_position / depth_norm -------------------------------------------
+
+def test_step_position_is_zero_at_the_first_step_and_one_at_the_last():
+    assert step_position(0, 10) == 0.0
+    assert step_position(9, 10) == 1.0
+    assert step_position(4, 9) == pytest.approx(0.5)
+
+
+def test_step_position_defaults_to_zero_for_a_trace_with_no_meaningful_length():
+    """A trace of 0 or 1 steps has no position to normalize against - this
+    must return 0.0 rather than raise a ZeroDivisionError."""
+    assert step_position(3, 1) == 0.0
+    assert step_position(3, 0) == 0.0
+
+
+def test_depth_norm_scales_against_the_deepest_step_in_the_trace():
+    assert depth_norm(2, 4) == pytest.approx(0.5)
+    assert depth_norm(4, 4) == pytest.approx(1.0)
+
+
+def test_depth_norm_defaults_to_zero_for_a_flat_trace():
+    """A trace with no nesting anywhere (max_depth == 0) has nothing to
+    normalize against - this must return 0.0 rather than divide by zero."""
+    assert depth_norm(0, 0) == 0.0
 
 
 # --- agrees_with_l1 -------------------------------------------------------
