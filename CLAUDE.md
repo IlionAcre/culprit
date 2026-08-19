@@ -32,6 +32,45 @@ ideas in this space are already served.
 
 Full original specification: `docs/superpowers/plans/2026-08-12-culprit-backend.md`.
 
+## Known limitations
+
+**The single biggest unsolved problem in this project: 85.9% of traces (269 of
+313 scored benchmark diagnoses) never have the correct root-cause step
+anywhere in L3's candidate shortlist at all.** This is a structural ceiling
+in L1/L2 candidate recall, not an L3 problem - no amount of adjudication
+quality or confidence calibration downstream can find a candidate that never
+arrives in front of it. It is *the* reason joint accuracy sits at 0.000 on
+both real benchmarks, TRAIL and Who&When (see "Measured results so far"
+below): almost entirely explained by candidates never reaching L3, not by L3
+judging badly once they do. The closest measured per-dataset breakdown,
+candidate_recall@5, tells two different stories: the correct step reaches the
+shortlist in 6.5% of TRAIL cases versus 3.8% of Who&When cases - TRAIL's
+candidate-generation layers do almost twice as well as Who&When's, though
+both are near floor.
+
+- **Root cause, L2.** The `divergences` table is completely empty across the
+  whole real benchmark run: every scored candidate's source is `l1` or the
+  synthetic `fallback`, never `l2` or `both` (consistent with the L2
+  ablation finding below, "L2 abstains `insufficient_references` on
+  essentially every real trace"). L2 requires a reference pool of successful
+  runs of *comparable tasks* and abstains below 3 references. TRAIL and
+  Who&When are failure-attribution benchmarks: they don't ship paired
+  successful runs of the same tasks, so L2 structurally has almost nothing
+  to work with on this kind of data.
+- **Root cause, L1.** Detectors were built and unit-tested against
+  `synth.py`'s synthetic traces, and fire sparsely on real OpenInference-
+  format traces - one signal on a typical TRAIL trace.
+- **What would fix this, versus what wouldn't.** This needs a different kind
+  of data, not a tuning pass: a source with paired success/failure runs of
+  the same tasks so L2 has a real reference pool, and/or validating and
+  likely rebuilding L1 detector coverage against real trace shapes instead
+  of only `synth.py`. Adjusting existing thresholds or weights does not
+  touch this, and neither does any of the L3 confidence-calibration work
+  already done (see "L3 adjudication" below).
+- **Status: unaddressed.** Out of scope for everything done so far in this
+  project. This is the top-priority next problem for anyone continuing this
+  work.
+
 ## Brand
 
 Name: **culprit**. Tagline: **"Not where it failed. Where it broke."** Don't
@@ -409,14 +448,11 @@ problem as detecting an anomalous step sequence in an agent trace.
     TRAIL-only AUC replication is the strongest evidence the richer
     features generalize rather than overfitting 447 rows; the combined-
     population AUC number alone would be weaker evidence on its own.
-  - **This refit does not touch the dominant unsolved problem.** The same
-    research pass measured that 85.9% of traces (269 of 313 scored
-    benchmark diagnoses) never have the correct step in their L3 candidate
-    shortlist at all - a structural ceiling in L1/L2 candidate recall that
-    no L3 calibration change, including this one, can cross. Calibrating
-    confidence better on the 14.1% of traces where the right candidate is
-    even reachable is a real but secondary improvement; candidate recall is
-    still the number that matters most and is still unaddressed.
+  - **This refit does not touch the dominant unsolved problem.** See "Known
+    limitations" near the top of this file: 85.9% of traces never have the
+    correct step in their L3 candidate shortlist at all, a structural
+    ceiling in L1/L2 candidate recall that no L3 calibration change,
+    including this one, can cross.
 
 ### L5 clustering
 
@@ -920,9 +956,10 @@ benchmarks among them.
   not describe the *system's end-to-end accuracy* as calibrated beyond what
   this fit measured - only the confidence-score mapping was fit, not a
   claim that the pipeline finds the right answer more often, and the
-  85.9%-of-traces candidate-recall ceiling (see "L3 adjudication") remains
-  the dominant unsolved problem regardless of how well confidence is
-  calibrated on the traces that do reach L3 with a correct candidate.
+  85.9%-of-traces candidate-recall ceiling (see "Known limitations" near the
+  top of this file) remains the dominant unsolved problem regardless of how
+  well confidence is calibrated on the traces that do reach L3 with a
+  correct candidate.
 
 **Verified 2026-08-18:**
 
