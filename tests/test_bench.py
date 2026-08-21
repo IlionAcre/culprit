@@ -6,9 +6,12 @@ adjudication" section). These tests prove the three writes happen, using
 fakes only - no real Postgres, matching this project's existing offline
 test style for store-layer calls (`tests/test_jobs.py`)."""
 
+import pytest
+
 from culprit import bench
 from culprit.benchmarks.base import BenchmarkCase
 from culprit.schemas import Outcome, Trace
+from culprit.signals import Adjudication
 from culprit.synth_results import make_diagnosis
 
 
@@ -98,6 +101,54 @@ def test_run_benchmark_still_persists_cases_when_diagnose_raises(monkeypatch):
     assert written_cases == [["t2-0", "t2-1"]]
     assert written_diagnoses == []
     assert "t2" in run.per_trace_errors
+
+
+def test_abstained_diagnosis_with_adjudications_yields_candidate_steps(monkeypatch):
+    """Task A's abstention fix: a diagnosis that abstained still ran L3 on a
+    real shortlist, so its cases must contribute to candidate recall rather
+    than being dropped from the denominator."""
+    cases = _cases("t4")
+    adjudications = [
+        Adjudication(
+            step_index=0, span_id="span-0", is_root_cause=False,
+            failure_class="unknown", confidence=0.1, calibrated_confidence=0.1,
+            rationale="", counterfactual="", cited_step_indices=[],
+            abstained=True, model="m", prompt_tokens=None,
+            completion_tokens=None, cost_usd=None, error=None,
+            source="l1",
+        ),
+        Adjudication(
+            step_index=2, span_id="span-2", is_root_cause=False,
+            failure_class="unknown", confidence=0.1, calibrated_confidence=0.1,
+            rationale="", counterfactual="", cited_step_indices=[],
+            abstained=True, model="m", prompt_tokens=None,
+            completion_tokens=None, cost_usd=None, error=None,
+            source="l2",
+        ),
+    ]
+    diagnosis = make_diagnosis(
+        trace_id="t4", abstained=True, abstain_reason="l3_abstained",
+        root_cause_step_index=None, root_cause_span_id=None,
+        failure_class=None, adjudications=adjudications,
+    )
+
+    monkeypatch.setattr(bench, "write_trace", lambda conn_fn, trace, spans, steps: None)
+    monkeypatch.setattr(bench, "write_benchmark_cases", lambda conn_fn, benchmark, cs: None)
+    monkeypatch.setattr(bench, "write_diagnosis", lambda conn_fn, d: None)
+    monkeypatch.setitem(bench.BENCHMARKS, "fake", lambda data: cases)
+    monkeypatch.setattr(bench.pipeline_mod, "diagnose", lambda trace, **kw: diagnosis)
+
+    run = bench.run_benchmark(
+        "fake", data=None, conn_fn=lambda: None,
+        call_fn=lambda *a, **kw: ("out", 1.0, 0.0, 10, 5),
+        embed_fn=lambda texts: [[0.0] * 384 for _ in texts],
+        model="fake-model",
+    )
+
+    assert run.report_all.n_abstained == 2
+    assert run.report_all.candidate_recall_at_k[5] == pytest.approx(1.0)
+    # No fillers yet, so the evidenced series must agree with the combined one.
+    assert run.report_all.evidenced_candidate_recall_at_k == run.report_all.candidate_recall_at_k
 
 
 def test_run_benchmark_calls_recycle_fn_after_writes_not_before(monkeypatch):

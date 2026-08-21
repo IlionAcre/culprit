@@ -110,6 +110,7 @@ class Adjudication:  # L3 emits, one per candidate
     completion_tokens: int | None
     cost_usd: float | None
     error: str | None = None
+    source: str = "unknown"  # carried from Candidate.source (l1/l2/both/fallback/filler)
 
 
 class Diagnosis(BaseModel):

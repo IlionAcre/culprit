@@ -95,6 +95,7 @@ def _sentinel_adjudication(candidate: Candidate, model: str, error: str) -> Adju
         completion_tokens=None,
         cost_usd=None,
         error=error,
+        source=candidate.source,
     )
 
 
@@ -144,6 +145,7 @@ def _adjudication_from_verdict(
         completion_tokens=completion_tokens,
         cost_usd=cost_usd,
         error=None,
+        source=candidate.source,
     )
 
 

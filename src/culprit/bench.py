@@ -123,7 +123,7 @@ def _contrast_ablated(*args, **kwargs) -> ContrastResult:
 def _case_results(cases: list[BenchmarkCase], diagnosis: Diagnosis | None) -> list[CaseResult]:
     results = []
     for case in cases:
-        if diagnosis is None or diagnosis.abstained:
+        if diagnosis is None:
             results.append(CaseResult(
                 truth_step=case.ground_truth_step_index,
                 truth_span_id=case.ground_truth_span_id,
@@ -139,7 +139,10 @@ def _case_results(cases: list[BenchmarkCase], diagnosis: Diagnosis | None) -> li
             predicted_class=diagnosis.failure_class,
             predicted_confidence=diagnosis.calibrated_confidence,
             # The ranked shortlist L1/L2 handed to L3, in adjudication order.
+            # Populated even when L3 abstains, because adjudication already ran
+            # on a real shortlist; only a pipeline that never ran stays empty.
             candidate_steps=[a.step_index for a in diagnosis.adjudications],
+            evidenced_candidate_steps=[a.step_index for a in diagnosis.adjudications if a.source != "filler"],
         ))
     return results
 

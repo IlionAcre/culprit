@@ -9,6 +9,7 @@ def test_score_empty_results_returns_zeroed_report_not_a_crash():
     assert report.exact_accuracy == 0.0
     assert report.tolerance_accuracy == {0: 0.0, 1: 0.0, 3: 0.0}
     assert report.candidate_recall_at_k == {1: 0.0, 3: 0.0, 5: 0.0}
+    assert report.evidenced_candidate_recall_at_k == {1: 0.0, 3: 0.0, 5: 0.0}
 
 
 def test_score_hand_worked_example_from_the_plan():
@@ -100,6 +101,34 @@ def test_calibration_perfect_confidence_yields_zero_brier_and_ece():
     assert report.brier_score == pytest.approx(0.0)
     assert report.ece == pytest.approx(0.0)
     assert len(report.reliability_points) == 2
+
+
+def test_evidenced_recall_agrees_with_combined_when_no_filler_exists():
+    """Before Task B introduces filler candidates, every candidate is
+    evidenced, so the two recall series must be identical."""
+    results = [
+        CaseResult(truth_step=5, candidate_steps=[5, 1, 2], evidenced_candidate_steps=[5, 1, 2]),
+        CaseResult(truth_step=9, candidate_steps=[1, 2, 3, 4, 9], evidenced_candidate_steps=[1, 2, 3, 4, 9]),
+    ]
+    report = score(results)
+    assert report.candidate_recall_at_k == report.evidenced_candidate_recall_at_k
+    assert report.evidenced_candidate_recall_at_k[1] == pytest.approx(0.5)
+    assert report.evidenced_candidate_recall_at_k[5] == pytest.approx(1.0)
+
+
+def test_evidenced_recall_excludes_filler_candidates():
+    """Filler padding (source='filler') lifts combined recall but must not
+    lift the evidenced series, which measures only L1/L2 narrowing."""
+    results = [
+        CaseResult(
+            truth_step=9,
+            candidate_steps=[1, 2, 3, 4, 9],  # filler at the end pushes truth into @5
+            evidenced_candidate_steps=[1, 2, 3, 4],  # same list with the filler removed
+        ),
+    ]
+    report = score(results)
+    assert report.candidate_recall_at_k[5] == pytest.approx(1.0)
+    assert report.evidenced_candidate_recall_at_k[5] == pytest.approx(0.0)
 
 
 def test_layer_ablation_delta_reports_negative_deltas_too():

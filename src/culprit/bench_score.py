@@ -57,6 +57,10 @@ class CaseResult:
     # adjudication picked among them. Empty means "not measured for this
     # case", excluded from candidate_recall_at_k rather than counted as 0.
     candidate_steps: list[int] = field(default_factory=list)
+    # Subset of candidate_steps whose source is not "filler"; tracked
+    # separately so the evidenced (L1/L2-driven) recall series stays visible
+    # after Task B adds filler padding to the shortlist.
+    evidenced_candidate_steps: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -76,6 +80,7 @@ class BenchReport:
     ece: float | None  # expected calibration error
     reliability_points: list[tuple[float, float, int]]  # (mean_confidence, accuracy, count) per bin
     candidate_recall_at_k: dict[int, float]  # {1: ..., 3: ..., 5: ...}; excludes cases with no candidates
+    evidenced_candidate_recall_at_k: dict[int, float]  # same, but excluding filler-sourced candidates
 
 
 def _safe_div(numerator: float, denominator: int) -> float:
@@ -98,6 +103,7 @@ def score(results: list[CaseResult]) -> BenchReport:
             confusion_matrix={}, joint_accuracy=0.0, earliness_error=0.0,
             brier_score=None, ece=None, reliability_points=[],
             candidate_recall_at_k={k: 0.0 for k in _RECALL_K_LEVELS},
+            evidenced_candidate_recall_at_k={k: 0.0 for k in _RECALL_K_LEVELS},
         )
 
     committed = [r for r in results if r.predicted_step is not None]
@@ -140,6 +146,7 @@ def score(results: list[CaseResult]) -> BenchReport:
 
     brier_score, ece, reliability_points = _calibration(results)
     candidate_recall_at_k = _candidate_recall(results)
+    evidenced_candidate_recall_at_k = _evidenced_candidate_recall(results)
 
     return BenchReport(
         n_cases=n, n_abstained=n_abstained, abstention_rate=_safe_div(n_abstained, n),
@@ -149,6 +156,7 @@ def score(results: list[CaseResult]) -> BenchReport:
         confusion_matrix=confusion_matrix, joint_accuracy=joint_accuracy,
         earliness_error=earliness_error, brier_score=brier_score, ece=ece,
         reliability_points=reliability_points, candidate_recall_at_k=candidate_recall_at_k,
+        evidenced_candidate_recall_at_k=evidenced_candidate_recall_at_k,
     )
 
 
@@ -200,6 +208,22 @@ def _candidate_recall(results: list[CaseResult]) -> dict[int, float]:
             recall[k] = 0.0
             continue
         hits = sum(1 for r in measured if r.truth_step in r.candidate_steps[:k])
+        recall[k] = hits / len(measured)
+    return recall
+
+
+def _evidenced_candidate_recall(results: list[CaseResult]) -> dict[int, float]:
+    """Same as `_candidate_recall`, but measured over
+    `evidenced_candidate_steps` so filler padding added in Task B does not
+    inflate the series that measures L1/L2 narrowing. Cases with no evidenced
+    shortlist are excluded from the denominator."""
+    measured = [r for r in results if r.evidenced_candidate_steps]
+    recall: dict[int, float] = {}
+    for k in _RECALL_K_LEVELS:
+        if not measured:
+            recall[k] = 0.0
+            continue
+        hits = sum(1 for r in measured if r.truth_step in r.evidenced_candidate_steps[:k])
         recall[k] = hits / len(measured)
     return recall
 
