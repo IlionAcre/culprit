@@ -18,14 +18,18 @@ true at the `Step` level, not just at the message level.
 **Kind refinement from content markers.** Each message defaults to
 `SpanKind.AGENT` (a turn of reasoning or delegation). A message whose content
 looks like a function call (`tool_name(args)`) is refined to `SpanKind.TOOL`,
-or `SpanKind.RETRIEVER` if the function name mentions search/retrieval - both
-kinds `linearize.py` still treats as semantic, so the message-to-step 1:1
-mapping survives the refinement. Known limitation, accepted rather than
-worked around by editing frozen `linearize.py`: `actor` on a refined
-non-AGENT step resolves through the flat parent chain to the synthetic root's
-own name (`linearize._resolve_actor`'s contract), not the per-message agent
-name; this does not affect any metric `bench_score.py` reports, all of which
-are step/class/confidence based, never actor based.
+or `SpanKind.RETRIEVER` if the function name mentions search/retrieval. A
+message following the AutoGen execution-result convention
+(`exitcode: N (execution succeeded|failed)\nCode output: ...`) is also
+refined to `SpanKind.TOOL`, with `is_error` set from the exit code and the
+`Code output:` body captured as `result_text` (and as `error_message` when the
+code is non-zero). Both kinds `linearize.py` still treats as semantic, so the
+message-to-step 1:1 mapping survives either refinement. Known limitation,
+accepted rather than worked around by editing frozen `linearize.py`: `actor`
+on a refined non-AGENT step resolves through the flat parent chain to the
+synthetic root's own name (`linearize._resolve_actor`'s contract), not the
+per-message agent name; this does not affect any metric `bench_score.py`
+reports, all of which are step/class/confidence based, never actor based.
 
 **`ground_truth_failure_class` is always `FailureClass.UNKNOWN`.** Who&When's
 ground truth is a free-text `mistake_reason`, not a labeled taxonomy, so
@@ -50,9 +54,19 @@ from culprit.taxonomy import FailureClass
 logger = logging.getLogger(LOGGER_NAME)
 
 _CALL_MARKER = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\((.*)\)\s*$", re.DOTALL)
+_EXITCODE_MARKER = re.compile(r"^\s*exitcode:\s*(\d+)\s*\(execution (succeeded|failed)\)")
 _RETRIEVAL_MARKERS = ("search", "retriev")
 _STEP_DURATION_NS = 500_000
 _STEP_SPACING_NS = 1_000_000
+
+
+def _extract_code_output(content: str) -> str:
+    """Return the body after the first ``Code output:`` marker."""
+    marker = "Code output:"
+    idx = content.find(marker)
+    if idx == -1:
+        return ""
+    return content[idx + len(marker):].lstrip()
 
 
 def _message_span(trace_id: str, root_id: str, case_id: str, i: int, agent: str, content: str) -> Span:
@@ -64,27 +78,48 @@ def _message_span(trace_id: str, root_id: str, case_id: str, i: int, agent: str,
         end_ns=start_ns + _STEP_DURATION_NS, vocabulary="benchmark:who_and_when", attributes={},
     )
 
-    match = _CALL_MARKER.match(content or "")
-    if match is None:
+    call_match = _CALL_MARKER.match(content or "")
+    if call_match is not None:
+        func_name, args = call_match.group(1), call_match.group(2)
+        if any(marker in func_name.lower() for marker in _RETRIEVAL_MARKERS):
+            return Span(
+                kind=SpanKind.RETRIEVER,
+                payload=RetrievalPayload(query=args, documents=[], top_k=0),
+                **common,
+            )
         return Span(
-            kind=SpanKind.AGENT,
-            payload=AgentPayload(agent_name=agent, role="", input_text="", output_text=content, delegated_to=[]),
+            kind=SpanKind.TOOL,
+            payload=ToolPayload(
+                tool_name=func_name, call_id=f"{case_id}-call-{i}", arguments_json=args or "{}",
+                arguments={}, result_text="", result_len=0, is_error=False, error_message=None,
+            ),
             **common,
         )
 
-    func_name, args = match.group(1), match.group(2)
-    if any(marker in func_name.lower() for marker in _RETRIEVAL_MARKERS):
-        return Span(
-            kind=SpanKind.RETRIEVER,
-            payload=RetrievalPayload(query=args, documents=[], top_k=0),
+    exit_match = _EXITCODE_MARKER.match(content or "")
+    if exit_match is not None:
+        code = int(exit_match.group(1))
+        is_error = code != 0
+        result_text = _extract_code_output(content or "")
+        error_message = result_text if is_error else None
+        span_common = {
             **common,
+            "status": SpanStatus.ERROR if is_error else SpanStatus.OK,
+            "status_message": error_message,
+        }
+        return Span(
+            kind=SpanKind.TOOL,
+            payload=ToolPayload(
+                tool_name="execution_result", call_id=f"{case_id}-call-{i}", arguments_json="{}",
+                arguments={}, result_text=result_text, result_len=len(result_text),
+                is_error=is_error, error_message=error_message,
+            ),
+            **span_common,
         )
+
     return Span(
-        kind=SpanKind.TOOL,
-        payload=ToolPayload(
-            tool_name=func_name, call_id=f"{case_id}-call-{i}", arguments_json=args or "{}",
-            arguments={}, result_text="", result_len=0, is_error=False, error_message=None,
-        ),
+        kind=SpanKind.AGENT,
+        payload=AgentPayload(agent_name=agent, role="", input_text="", output_text=content, delegated_to=[]),
         **common,
     )
 
