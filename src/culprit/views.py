@@ -54,6 +54,7 @@ def adjudication_view(adjudication: Adjudication) -> dict:
     return {
         "step_index": adjudication.step_index,
         "span_id": adjudication.span_id,
+        "source": adjudication.source,
         "is_root_cause": adjudication.is_root_cause,
         "failure_class": adjudication.failure_class,
         "confidence": adjudication.confidence,

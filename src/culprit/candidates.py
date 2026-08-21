@@ -16,7 +16,7 @@ its own layer already failed on that item, and letting it count would let a
 detector bug silently manufacture a fake root-cause candidate.
 """
 
-from culprit.schemas import Outcome, Step, Trace
+from culprit.schemas import Outcome, SpanKind, Step, Trace
 from culprit.signals import Candidate, DivergenceCandidate, Signal
 
 # Matches CulpritConfig.max_candidates / min_reference_runs-style hardcoded
@@ -43,6 +43,60 @@ def _fallback_span_id(step_index: int, step_span: dict[int, str], signals: list[
     if divergence is not None:
         return divergence.span_id
     return ""
+
+
+# Kinds that are concrete reasoning or action steps. CHAIN/EMBEDDING/GUARDRAIL
+# are framework glue folded into neighbours by linearize.py, and UNKNOWN carries
+# no interpretable semantics, so neither makes a useful filler.
+_SEMANTIC_KINDS = {SpanKind.LLM, SpanKind.AGENT, SpanKind.TOOL, SpanKind.RETRIEVER}
+_LLM_KINDS = {SpanKind.LLM, SpanKind.AGENT}
+
+
+def _spread_evenly(items: list[Step], used: set[int], count: int) -> list[int]:
+    """Pick up to `count` step indices from `items` (already sorted by position)
+    with roughly equal spacing, skipping any index in `used`."""
+    if count <= 0 or not items:
+        return []
+    if count >= len(items):
+        return [s.step_index for s in items if s.step_index not in used]
+
+    chosen: list[int] = []
+    seen: set[int] = set()
+    # Spread count points across the available items; use round() so the first
+    # and last items are included when count > 1, giving coverage of the trace.
+    for i in range(count):
+        idx = round(i * (len(items) - 1) / (count - 1))
+        step = items[idx]
+        if step.step_index not in used and step.step_index not in seen:
+            chosen.append(step.step_index)
+            seen.add(step.step_index)
+    # If duplicates from rounding left us short, greedily fill from the sorted
+    # list, still respecting `used`.
+    if len(chosen) < count:
+        for s in items:
+            if s.step_index not in used and s.step_index not in seen:
+                chosen.append(s.step_index)
+                seen.add(s.step_index)
+            if len(chosen) == count:
+                break
+    return chosen
+
+
+def _select_filler_step_indices(steps: list[Step], used: set[int], count: int) -> list[int]:
+    """Return up to `count` filler step indices spread evenly across the trace,
+    preferring LLM-kind steps and falling back to any semantic step.
+    """
+    sorted_steps = sorted(steps, key=lambda s: s.step_index)
+    semantic = [s for s in sorted_steps if s.kind in _SEMANTIC_KINDS]
+    llm_kind = [s for s in semantic if s.kind in _LLM_KINDS]
+
+    chosen = _spread_evenly(llm_kind, used, count)
+    remaining = count - len(chosen)
+    if remaining > 0:
+        chosen_set = set(chosen)
+        semantic_remaining = [s for s in semantic if s.step_index not in used and s.step_index not in chosen_set]
+        chosen.extend(_spread_evenly(semantic_remaining, used | chosen_set, remaining))
+    return chosen
 
 
 def merge_candidates(
@@ -116,19 +170,47 @@ def merge_candidates(
     # candidates, the earlier one is more likely the cause, not the echo.
     built.sort(key=lambda c: (-c.prior, c.step_index))
     built = built[:max_candidates]
-    for rank, candidate in enumerate(built, start=1):
-        candidate.rank = rank
 
+    # Zero surviving real candidates on a FAILURE trace still emits one synthetic
+    # candidate at the terminal step with source="fallback" and prior=0.0 - the
+    # plan's guarantee that L3 always examines something concrete.
     if not built and trace is not None and trace.outcome == Outcome.FAILURE and steps:
         terminal = max(steps, key=lambda s: s.step_index)
-        built = [Candidate(
+        built.append(Candidate(
             step_index=terminal.step_index,
             span_id=terminal.span_id,
-            rank=1,
+            rank=0,
             prior=0.0,
             source="fallback",
             signals=[],
             divergence=None,
-        )]
+        ))
+
+    # Pad with evidence-free filler candidates so the shortlist always spends
+    # its full budget on FAILURE traces. Fillers rank last, never duplicate a
+    # real/fallback index, and prefer LLM-kind steps spread evenly across the
+    # trace. SUCCESS traces keep the empty result - there is no root cause to
+    # adjudicate, so spending LLM calls on them would be pure waste.
+    target_count = min(max_candidates, len(steps))
+    needed = target_count - len(built)
+    if needed > 0 and trace is not None and trace.outcome == Outcome.FAILURE:
+        used_indices = {c.step_index for c in built}
+        filler_indices = _select_filler_step_indices(steps, used_indices, needed)
+        for step_index in filler_indices:
+            built.append(Candidate(
+                step_index=step_index,
+                span_id=step_span.get(step_index, ""),
+                rank=0,
+                prior=0.0,
+                source="filler",
+                signals=[],
+                divergence=None,
+            ))
+
+    # Real evidence and the fallback outrank fillers; within each group earlier
+    # steps win ties so the ranking stays deterministic and positional.
+    built.sort(key=lambda c: (c.source == "filler", -c.prior, c.step_index))
+    for rank, candidate in enumerate(built, start=1):
+        candidate.rank = rank
 
     return built

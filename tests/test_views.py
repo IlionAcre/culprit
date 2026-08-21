@@ -46,7 +46,7 @@ def test_divergence_view_selects_exactly_the_documented_fields():
 
 def test_adjudication_view_selects_exactly_the_documented_fields():
     adjudication = Adjudication(
-        step_index=1, span_id="s1", is_root_cause=True,
+        step_index=1, span_id="s1", source="filler", is_root_cause=True,
         failure_class=FailureClass.TOOL_FAILURE_UNHANDLED.value, confidence=0.9,
         calibrated_confidence=0.7, rationale="r", counterfactual="c",
         cited_step_indices=[1, 2], abstained=False, model="m",
@@ -56,10 +56,11 @@ def test_adjudication_view_selects_exactly_the_documented_fields():
     view = adjudication_view(adjudication)
 
     assert set(view.keys()) == {
-        "step_index", "span_id", "is_root_cause", "failure_class", "confidence",
-        "calibrated_confidence", "rationale", "counterfactual", "cited_step_indices",
-        "abstained", "model", "cost_usd", "error",
+        "step_index", "span_id", "source", "is_root_cause", "failure_class",
+        "confidence", "calibrated_confidence", "rationale", "counterfactual",
+        "cited_step_indices", "abstained", "model", "cost_usd", "error",
     }
+    assert view["source"] == "filler"
     # prompt_tokens/completion_tokens are deliberately excluded from the
     # response shape (internal cost accounting detail), proving this is a
     # hand-picked view rather than every Adjudication field.
@@ -112,6 +113,31 @@ def test_two_diagnoses_differing_only_by_id_still_differ_only_in_id_fields():
     assert {k: v for k, v in v1.items() if k != "diagnosis_id"} == {
         k: v for k, v in v2.items() if k != "diagnosis_id"
     }
+
+
+def test_diagnosis_detail_view_surfaces_candidate_source_on_every_adjudication():
+    """Done-when 5: CLI/API consumers can tell which adjudications came from
+    evidence-free fillers versus real L1/L2 signals."""
+    l1 = Adjudication(
+        step_index=0, span_id="s0", source="l1", is_root_cause=False,
+        failure_class=FailureClass.UNKNOWN.value, confidence=0.5,
+        calibrated_confidence=0.3, rationale="r", counterfactual="c",
+        cited_step_indices=[], abstained=True, model="m",
+        prompt_tokens=1, completion_tokens=1, cost_usd=0.0001,
+    )
+    filler = Adjudication(
+        step_index=1, span_id="s1", source="filler", is_root_cause=False,
+        failure_class=FailureClass.UNKNOWN.value, confidence=0.5,
+        calibrated_confidence=0.1, rationale="r", counterfactual="c",
+        cited_step_indices=[], abstained=True, model="m",
+        prompt_tokens=1, completion_tokens=1, cost_usd=0.0001,
+    )
+    diagnosis = make_diagnosis(adjudications=[l1, filler])
+
+    view = diagnosis_detail_view(diagnosis)
+
+    sources = [a["source"] for a in view["adjudications"]]
+    assert sources == ["l1", "filler"]
 
 
 def test_job_status_view_passes_through_the_documented_fields():

@@ -10,9 +10,9 @@ def _trace(outcome: Outcome = Outcome.FAILURE) -> Trace:
     )
 
 
-def _step(index: int) -> Step:
+def _step(index: int, kind: SpanKind = SpanKind.TOOL) -> Step:
     return Step(
-        trace_id="t1", step_index=index, span_id=f"span-{index}", kind=SpanKind.TOOL,
+        trace_id="t1", step_index=index, span_id=f"span-{index}", kind=kind,
         actor="agent", depth=0, tree_path="0", signature="tool:agent:x:ok",
         summary="does something", start_ns=0, end_ns=1_000_000, duration_ms=1.0,
     )
@@ -113,15 +113,18 @@ def test_merge_excludes_whole_trace_sentinel_signals_at_step_index_negative_one(
 
 def test_merge_emits_fallback_candidate_on_failure_trace_with_zero_real_candidates():
     """L3 must always examine something concrete on a genuine failure, even
-    when no L1 detector and no L2 divergence caught anything."""
+    when no L1 detector and no L2 divergence caught anything. Fillers pad the
+    shortlist around the fallback, but the fallback itself still leads."""
     steps = [_step(0), _step(1), _step(2)]
 
     candidates = merge_candidates([], [], _trace(Outcome.FAILURE), steps)
 
-    assert len(candidates) == 1
-    assert candidates[0].step_index == 2  # terminal step
+    assert len(candidates) == 3
+    assert candidates[0].step_index == 2  # terminal fallback leads
     assert candidates[0].source == "fallback"
     assert candidates[0].rank == 1
+    filler_indices = {c.step_index for c in candidates if c.source == "filler"}
+    assert filler_indices == {0, 1}
 
 
 def test_merge_does_not_fallback_on_a_non_failure_trace_with_zero_candidates():
@@ -136,3 +139,81 @@ def test_merge_returns_empty_when_there_are_no_steps_at_all_to_fall_back_to():
     candidates = merge_candidates([], [], _trace(Outcome.FAILURE), [])
 
     assert candidates == []
+
+
+def test_merge_fills_one_l1_signal_to_max_candidates_with_real_at_rank_one():
+    """Done-when 1: a single real signal must still produce a full shortlist,
+    with the evidenced candidate leading and fillers padding the budget."""
+    steps = [_step(i, SpanKind.LLM) for i in range(5)]
+    signals = [make_signal(step_index=2, severity=0.8)]
+
+    candidates = merge_candidates(signals, [], _trace(), steps)
+
+    assert len(candidates) == 5
+    assert candidates[0].step_index == 2
+    assert candidates[0].source == "l1"
+    assert candidates[0].rank == 1
+    assert all(c.source == "filler" and c.prior == 0.0 for c in candidates[1:])
+    assert set(c.step_index for c in candidates) == {0, 1, 2, 3, 4}
+
+
+def test_merge_leaves_five_real_candidates_unchanged():
+    """Done-when 2: when L1/L2 already fill the budget, no fillers enter."""
+    steps = [_step(i) for i in range(5)]
+    signals = [make_signal(step_index=i, severity=0.5) for i in range(5)]
+
+    candidates = merge_candidates(signals, [], _trace(), steps)
+
+    assert len(candidates) == 5
+    assert all(c.source == "l1" for c in candidates)
+    assert all(c.prior == 0.5 for c in candidates)
+
+
+def test_merge_filler_never_duplicates_real_candidate_step_index():
+    """Done-when 3: fillers skip indices already occupied by real candidates
+    or the fallback."""
+    steps = [_step(i, SpanKind.LLM) for i in range(5)]
+    signals = [make_signal(step_index=2, severity=0.8)]
+
+    candidates = merge_candidates(signals, [], _trace(), steps)
+
+    seen: set[int] = set()
+    for c in candidates:
+        assert c.step_index not in seen
+        seen.add(c.step_index)
+    assert len(seen) == 5
+
+
+def test_merge_respects_trace_length_when_fewer_than_max_candidates_steps():
+    """Done-when 4: never produce more candidates than there are steps."""
+    steps = [_step(i, SpanKind.LLM) for i in range(3)]
+    signals = [make_signal(step_index=1, severity=0.8)]
+
+    candidates = merge_candidates(signals, [], _trace(), steps)
+
+    assert len(candidates) == 3
+    assert {c.step_index for c in candidates} == {0, 1, 2}
+
+
+def test_merge_prefers_llm_kind_steps_then_falls_back_to_semantic_steps():
+    """Fillers prefer LLM-kind steps spread evenly; when those run out they
+    use other semantic steps rather than unknown/collapsed framework glue."""
+    steps = [
+        _step(0, SpanKind.LLM),
+        _step(1, SpanKind.TOOL),
+        _step(2, SpanKind.TOOL),
+        _step(3, SpanKind.LLM),
+        _step(4, SpanKind.UNKNOWN),
+    ]
+    signals = [make_signal(step_index=1, severity=0.8)]
+
+    candidates = merge_candidates(signals, [], _trace(), steps)
+
+    fillers = [c for c in candidates if c.source == "filler"]
+    # Budget is 5; step 1 is real, step 4 is UNKNOWN, so 3 semantic fillers
+    # remain and the shortlist stops at 4 candidates total.
+    assert len(fillers) == 3
+    filler_kinds = {steps[c.step_index].kind for c in fillers}
+    assert SpanKind.UNKNOWN not in filler_kinds
+    # Both available LLM-kind slots should be used before falling back to TOOL.
+    assert SpanKind.LLM in filler_kinds
