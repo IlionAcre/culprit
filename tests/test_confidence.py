@@ -37,36 +37,36 @@ def _adjudication(
 
 # --- fitted default coefficients (richer-feature refit, 2026-08-17) -------
 
-def test_default_coefficients_are_the_richer_feature_refit_values():
-    """Fitted by logistic regression against the same 447-row TRAIL/Who&When
-    population as I7 (46 positive), on the richer production-viable feature
-    set (CLAUDE.md's "L3 adjudication" section has the full fit: sample
-    size, cross-validation AUC, and the precision-at-threshold table the
+def test_default_coefficients_are_the_phase_3_refit_values():
+    """Refit 2026-08-21 against 3,021 persisted adjudication rows (410
+    positive) from all four benchmark configurations after the shortlist was
+    filled to five candidates, including `is_filler` as the eleventh feature
+    (CLAUDE.md's "L3 adjudication" section has the full fit: sample size,
+    cross-validation AUC/Brier, and the precision-at-threshold table the
     floor was chosen from). Regression-pins the values so a future edit
     cannot silently drift without a test failure calling it out."""
-    assert DEFAULT_A0 == pytest.approx(-4.3970)
-    assert DEFAULT_A1 == pytest.approx(-0.0482)
-    assert DEFAULT_A2 == pytest.approx(0.2273)
-    assert DEFAULT_A3 == pytest.approx(-0.0892)
-    assert DEFAULT_A4 == pytest.approx(0.0020)
-    assert DEFAULT_A5 == pytest.approx(0.1206)
-    assert DEFAULT_A6 == pytest.approx(2.1086)
-    assert DEFAULT_A7 == pytest.approx(1.1989)
-    assert DEFAULT_A8 == pytest.approx(0.2925)
-    assert DEFAULT_A9 == pytest.approx(-1.5935)
-    assert DEFAULT_A10 == pytest.approx(0.0)
+    assert DEFAULT_A0 == pytest.approx(-5.3395)
+    assert DEFAULT_A1 == pytest.approx(0.0077)
+    assert DEFAULT_A2 == pytest.approx(-1.4268)
+    assert DEFAULT_A3 == pytest.approx(-0.4531)
+    assert DEFAULT_A4 == pytest.approx(-0.4575)
+    assert DEFAULT_A5 == pytest.approx(0.8888)
+    assert DEFAULT_A6 == pytest.approx(1.3492)
+    assert DEFAULT_A7 == pytest.approx(2.5913)
+    assert DEFAULT_A8 == pytest.approx(0.7388)
+    assert DEFAULT_A9 == pytest.approx(-1.8539)
+    assert DEFAULT_A10 == pytest.approx(0.7661)
 
 
-def test_default_coefficients_now_weight_step_position_and_depth_over_the_original_four_features():
-    """The richer refit's headline finding: once rank, step position, step
-    depth, and L1 signal count are in the model, they carry more weight
-    than the original four features - including agreement (a3), which came
-    back small and slightly negative here, a genuinely different (and less
-    flattering) result than I7's fit, where agreement was one of the two
-    dominant terms."""
-    assert abs(DEFAULT_A6) > abs(DEFAULT_A2)
-    assert abs(DEFAULT_A6) > abs(DEFAULT_A3)
-    assert abs(DEFAULT_A7) > abs(DEFAULT_A3)
+def test_default_coefficients_now_weight_depth_and_rank_over_prior_and_evidence():
+    """The Phase 3 refit's headline finding: once the shortlist is always
+    five candidates, `prior` and `evidence_density` come back negative on
+    this population, while `depth_norm` (a7) and `rank_norm` (a5) carry the
+    largest positive weights. This is a different (and less flattering)
+    shape than the 2026-08-17 fit, and it is what the persisted rows say."""
+    assert abs(DEFAULT_A7) > abs(DEFAULT_A2)
+    assert abs(DEFAULT_A7) > abs(DEFAULT_A4)
+    assert abs(DEFAULT_A5) > abs(DEFAULT_A3)
 
 
 # --- cite_check --------------------------------------------------------
@@ -99,11 +99,15 @@ def test_cite_check_returns_zero_for_an_empty_citation_list():
 _BASE_KW = dict(rank=1, step_position=0.5, depth_norm=0.3, n_l1_signals=1, is_fallback=False, is_filler=False)
 
 
-def test_calibrated_confidence_increases_with_higher_evidence_density():
-    low = calibrate_confidence(0.7, 0.5, False, 0.0, **_BASE_KW)
-    high = calibrate_confidence(0.7, 0.5, False, 1.0, **_BASE_KW)
+def test_calibrated_confidence_decreases_with_higher_evidence_density():
+    """The Phase 3 refit makes `evidence_density` negative on this
+    population once rank, position, depth, signal-count, and source flags are
+    present; higher citation density now predicts lower probability of being
+    the true root cause, not higher."""
+    low_density = calibrate_confidence(0.7, 0.5, False, 0.0, **_BASE_KW)
+    high_density = calibrate_confidence(0.7, 0.5, False, 1.0, **_BASE_KW)
 
-    assert high > low
+    assert high_density < low_density
 
 
 def test_calibrated_confidence_no_longer_increases_with_agreement_under_the_richer_model():
@@ -168,14 +172,14 @@ def test_calibrated_confidence_decreases_for_a_fallback_candidate():
 
 
 def test_calibrated_confidence_is_unchanged_for_a_filler_candidate_when_a10_is_zero():
-    """`is_filler` joins the fit with a default coefficient of 0.0 so
-    behaviour is identical to today until F2 refits."""
+    """A filler candidate is indistinguishable from a real one only when its
+    coefficient is forced to 0.0; the shipped DEFAULT_A10 is no longer 0.0."""
     real = calibrate_confidence(0.7, 0.5, False, 0.5, rank=1, step_position=0.5,
                                  depth_norm=0.3, n_l1_signals=1, is_fallback=False,
-                                 is_filler=False)
+                                 is_filler=False, a10=0.0)
     filler = calibrate_confidence(0.7, 0.5, False, 0.5, rank=1, step_position=0.5,
                                    depth_norm=0.3, n_l1_signals=1, is_fallback=False,
-                                   is_filler=True)
+                                   is_filler=True, a10=0.0)
 
     assert filler == pytest.approx(real)
 

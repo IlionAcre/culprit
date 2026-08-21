@@ -1,0 +1,33 @@
+Population: 3021 rows, 410 positive (13.6%)
+Source distribution: fallback=196  filler=2072  other=753
+
+==============================================================================
+FEATURE SET: phase-3 richer + is_filler -> ['model_confidence', 'prior', 'agreement', 'evidence_density', 'rank_norm', 'step_position', 'depth_norm', 'n_l1_signals', 'is_fallback', 'is_filler']
+Out-of-fold AUC across seeds [42, 7, 123, 2026, 99]: [0.667, 0.67, 0.671, 0.66, 0.676], mean=0.669, std=0.005
+Out-of-fold Brier across seeds [42, 7, 123, 2026, 99]: [0.1136, 0.1135, 0.1136, 0.114, 0.1134], mean=0.1136, std=0.0002
+Full-population fit (ships): intercept=-5.3395
+  a0 (intercept)           : -5.3395
+  a1 (    model_confidence): 0.0077
+  a2 (               prior): -1.4268
+  a3 (           agreement): -0.4531
+  a4 (    evidence_density): -0.4575
+  a5 (           rank_norm): 0.8888
+  a6 (       step_position): 1.3492
+  a7 (          depth_norm): 2.5913
+  a8 (        n_l1_signals): 0.7388
+  a9 (         is_fallback): -1.8539
+  a10 (           is_filler): 0.7661
+
+Precision-at-threshold table (out-of-fold probs, last seed shown):
+threshold  coverage n_committed n_correct precision trustworthy
+     0.05     92.2%        2786       410     14.7%         yes
+     0.08     76.7%        2316       386     16.7%         yes
+     0.10     66.6%        2013       357     17.7%         yes
+     0.12     61.7%        1865       337     18.1%         yes
+     0.15     43.8%        1323       282     21.3%         yes
+     0.18     20.3%         613       144     23.5%         yes
+     0.20     13.0%         392        83     21.2%         yes
+     0.25      4.8%         146        13      8.9%         yes
+     0.30      0.0%           0         0      nan%   NO (n<15)
+     0.35      0.0%           0         0      nan%   NO (n<15)
+     0.40      0.0%           0         0      nan%   NO (n<15)

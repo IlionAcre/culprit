@@ -330,18 +330,22 @@ problem as detecting an anomalous step sequence in an agent trace.
   evidenced candidates. The benchmark now reports both an **evidenced**
   recall series (real L1/L2 candidates only) and a combined series.
 
-- **Confidence calibration is currently inverted against real trace shape.**
-  The fitted coefficients reward deep, late positions more than evidence:
+- **Confidence calibration remains inverted against real trace shape after
+  the Phase 3 refit.** The new coefficients still reward position/depth more
+  than evidence, and the inversion is now sharper:
 
   | Candidate | Calibrated | Outcome |
   |---|---:|---|
-  | Zero-evidence filler, last step, deepest nesting | 0.232 | commits |
-  | Zero-evidence filler, last step, mid depth | 0.142 | abstains |
-  | Real L1 candidate: prior 0.7, 2 signals, rank 1, agreement, mid-trace | 0.112 | abstains |
+  | Zero-evidence filler, last step, deepest nesting | 0.351 | commits |
+  | Zero-evidence filler, last step, mid depth | 0.129 | abstains |
+  | Real L1 candidate: prior 0.7, 2 signals, rank 1, agreement, mid-trace | 0.052 | abstains |
 
-  `a6=2.1086` on `step_position` and `a7=1.1989` on `depth_norm` dominate
-  `a2=0.2273` on `prior`. This is a present-tense defect; Phase 3's filler
-  work exposes it more widely, and the refit in Task F2 is the intended fix.
+  `a7=2.5913` on `depth_norm` and `a6=1.3492` on `step_position` continue to
+  dominate `a2=-1.4268` on `prior`. The refit moved `prior` and
+  `evidence_density` negative on this population, so the model now penalizes
+  the very features that distinguish real candidates from fillers. This is a
+  present-tense defect; the numbers are written down because the project's
+  convention demands it.
 
 - **Exactly five candidates per trace, one LLM call each, fanned out with
   `ThreadPoolExecutor(max_workers=4).map()`.** Five, because the whole
@@ -379,89 +383,69 @@ problem as detecting an anomalous step sequence in an agent trace.
   Loop"** (2022): presenting ranked suspects to a human rather than a
   verdict.
 
-- **Confidence calibration, current state (third revision, 2026-08-17):
-  `calibrate_confidence()` fits nine features by logistic regression, not
-  four, and not hand-set priors.** The formula is `sigmoid(a0 +
+- **Confidence calibration, current state (fourth revision, 2026-08-21):
+  `calibrate_confidence()` fits eleven features by logistic regression, not
+  hand-set priors.** The formula is `sigmoid(a0 +
   a1*logit(model_confidence) + a2*prior + a3*agreement +
   a4*evidence_density + a5*rank_score(rank) + a6*step_position +
-  a7*depth_norm + a8*n_l1_signals + a9*is_fallback)`. `rank_score` maps
-  `Candidate.rank` onto [0,1] (1.0 for the top-ranked candidate);
-  `step_position` and `depth_norm` are the candidate's step position and
-  nesting depth each normalized against the whole trace; `n_l1_signals` is
-  how many L1 detectors fired on that step; `is_fallback` flags the
-  zero-evidence synthetic candidate `candidates.py` emits when nothing else
-  fired. Current coefficients: `a0=-4.3970 a1=-0.0482 a2=0.2273 a3=-0.0892
-  a4=0.0020 a5=0.1206 a6=2.1086 a7=1.1989 a8=0.2925 a9=-1.5935`
-  (`DEFAULT_A0`-`DEFAULT_A9` in `confidence.py`, pinned by
-  `tests/test_confidence.py`). The confidence floor (`_DEFAULT_MIN_CONFIDENCE`,
-  also `CulpritConfig.min_confidence`) is **0.15**, down from 0.55.
-  - **Why 0.15, from a precision-at-threshold table on the same 447-row
-    population the model is fit on.** At threshold 0.15: 122 candidates
-    committed (well over the ~15-count trustworthy floor), 23.8% precision
-    (out-of-fold, averaged over 5 CV seeds) against a 10.3% unconditional
-    base rate - roughly 2.3x lift, versus 1.4-1.8x at the thresholds below
-    it. Raising the floor further (0.18: 41.7% precision) trades most of
-    the remaining coverage (13.4% vs 27.3%) for a smaller, more volatile
-    committed set; 0.15 was chosen as the lowest threshold that is both
-    trustworthy and a real, not marginal, improvement over guessing.
+  a7*depth_norm + a8*n_l1_signals + a9*is_fallback + a10*is_filler)`.
+  `is_filler` (`Candidate.source == "filler"`) joins the fit so the model
+  learns the value of evidence-free filler candidates rather than letting
+  the positional terms absorb it. Current coefficients:
+  `a0=-5.3395 a1=0.0077 a2=-1.4268 a3=-0.4531 a4=-0.4575 a5=0.8888
+  a6=1.3492 a7=2.5913 a8=0.7388 a9=-1.8539 a10=0.7661`
+  (`DEFAULT_A0`-`DEFAULT_A10` in `confidence.py`, pinned by
+  `tests/test_confidence.py`). The confidence floor
+  (`_DEFAULT_MIN_CONFIDENCE`, also `CulpritConfig.min_confidence`) stays
+  **0.15**.
+  - **Fit population.** 3,021 persisted adjudication rows (410 positive,
+    13.6% base rate) from all four benchmark configurations after Task B
+    filled the shortlist to five candidates. Out-of-fold AUC is ~0.669 and
+    Brier ~0.114 (5-fold CV averaged over 5 seeds). This is a larger but
+    still narrow population than ideal; treat the coefficients as
+    provisional.
+  - **Precision-at-threshold table from the 2026-08-21 fit.** At threshold
+    0.15: 1,323 candidates committed, 282 correct, 21.3% precision, 43.8%
+    coverage. At 0.18: 613 committed, 144 correct, 23.5% precision, 20.3%
+    coverage. The 0.18 threshold is slightly more precise but commits on
+    only one trace in five; 0.15 keeps more than twice the coverage while
+    still beating the base rate, so the floor stays where it is.
   - **Production-feasibility constraint: no dataset-identity feature ships,
-    even though one measured well in research.** A same-day investigation
-    (scripts left uncommitted under `data/benchmarks/results/`,
+    even though one measured well in research.** The 2026-08-17 research
+    pass (scripts left uncommitted under `data/benchmarks/results/`,
     `richer_features_20260817.py` and `refit_richer_features_20260817.py`)
     found that adding `rank`/`step_position`/`depth_norm`/`n_l1_signals`
     lifts out-of-fold AUC from ~0.61 (the original 4-feature model) to
-    ~0.74, and, critically, this lift **survives on TRAIL-only data alone**
+    ~0.74, and this lift **survives on TRAIL-only data alone**
     (0.547 -> 0.755 AUC per-dataset), which rules out the richer model
     merely learning "which benchmark is this" via a `dataset_trail`/
-    `source_fallback` confound - the researcher explicitly tested a
-    `dataset_trail` feature (it measured even higher, ~0.767 combined AUC)
-    and excluded it anyway, because a real ingested production trace has no
-    such label to read. `is_fallback` (`Candidate.source == "fallback"`) is
-    a genuinely different feature from the dataset flag - real, available
-    at inference time on production traffic - and was kept after refitting
-    confirmed it improves AUC (~0.715 -> ~0.739) and precision on this
-    population.
+    `source_fallback` confound. `is_fallback` (`Candidate.source ==
+    "fallback"`) was kept because it is available on production traffic;
+    `is_filler` is added for the same reason now that fillers exist.
   - **How this state was reached.** Hand-set priors
     (`a0=0.0, a1=1.0, a2=0.5, a3=0.3, a4=1.5`) were replaced 2026-08-17 by
-    I7's first fit: logistic regression on 447 real adjudication rows (46
-    positive) using only `model_confidence`, `prior`, `agreement`, and
-    `evidence_density`, giving `a0=-2.6065 a1=-0.0285 a2=0.7678 a3=0.6492
-    a4=0.0053` (Brier 0.878 -> 0.090, ECE 0.886 -> 0.004 on that
-    population; 5-fold CV Brier 0.0909 tracked in-sample 0.0902, not
-    degenerate). That fit's real finding was that cite-check and raw model
-    confidence turned out not to matter, while prior and L1 agreement
-    carried nearly all the signal - the opposite of the hand-set
-    assumption. But a brute-force scan of that formula's output over its
-    whole realistic input domain topped out around 0.28-0.29, permanently
-    below the 0.55 floor in place at the time, so `select_diagnosis`
-    abstained on every trace regardless of evidence strength - discovered
-    while fixing `tests/test_pipeline.py` post-I7 and left as an open issue
-    pending a maintainer decision, since editing the coefficients or floor
-    was out of scope for that task. The richer-feature refit documented
-    above is that decision: it fits ten coefficients on the wider feature
-    set (raising the ceiling to ~0.83-0.91 over the realistic input domain)
-    and picks a new floor from measured precision, closing the ceiling-vs-
-    floor gap instead of only re-deriving the same four terms.
+    I7's first 4-feature fit, then by the richer 10-feature fit documented
+    in the prior revision of this entry (`a0=-4.3970 a1=-0.0482 a2=0.2273
+    a3=-0.0892 a4=0.0020 a5=0.1206 a6=2.1086 a7=1.1989 a8=0.2925
+    a9=-1.5935`). Phase 3 Task F2 refit that 10-feature model on the new
+    filled-shortlist population and added `is_filler`. The new fit flips
+    the signs of `prior` and `evidence_density` and keeps the positional
+    terms dominant, so the calibration-inversion table above remains true.
     `tests/test_pipeline.py`'s
     `test_diagnose_wires_l3_and_commits_a_well_supported_root_cause`
-    (through two prior names, `..._and_surfaces_a_committed_root_cause`
-    then `..._and_correctly_abstains_below_the_fitted_confidence_ceiling`)
-    now asserts a correct commit again under a well-supported synthetic
-    scenario, verified against the actual coefficients rather than assumed.
-  - **What remains thin versus solid.** The whole fit, at every stage, rests
-    on the same 447 rows and 46 positives - genuinely small, and the
-    biggest reason to treat any of these coefficients as provisional. The
-    TRAIL-only AUC replication is the strongest evidence the richer
-    features generalize rather than overfitting 447 rows; the combined-
-    population AUC number alone would be weaker evidence on its own.
-  - **This refit does not touch the dominant unsolved problem.** The same
-    research pass measured that 85.9% of traces (269 of 313 scored
-    benchmark diagnoses) never have the correct step in their L3 candidate
-    shortlist at all - a structural ceiling in L1/L2 candidate recall that
-    no L3 calibration change, including this one, can cross. Calibrating
-    confidence better on the 14.1% of traces where the right candidate is
-    even reachable is a real but secondary improvement; candidate recall is
-    still the number that matters most and is still unaddressed.
+    continues to assert a correct commit under a well-supported synthetic
+    scenario.
+  - **What remains thin versus solid.** The whole fit now rests on 3,021
+    rows, but they still come from just two public benchmarks and four
+    fixed configurations. The out-of-fold AUC and Brier are measured, not
+    asserted, and the precision-at-threshold table is honest; that is the
+    strongest evidence available. The coefficients should still be treated
+    as provisional on any new trace shape.
+  - **This refit does not touch the dominant unsolved problem.** Candidate
+    recall is still the binding ceiling on end-to-end accuracy; see
+    "Measured results so far" for the post-refit numbers. Calibrating
+    confidence better on the minority of traces where the right candidate
+    reaches L3 is a real but secondary improvement.
 
 ### L5 clustering
 
@@ -911,6 +895,68 @@ that do not exist; 1 annotation file has a literal trailing-comma syntax
 error upstream; 1 trace emits the same span twice (deduped in the adapter).
 Who&When's real schema needed only a thin prepare script; its `mistake_step`
 is a direct history index as the adapter assumed.
+
+**Real benchmark scores, 2026-08-21 (Phase 3 Task F2).** Run after Tasks A,
+B, C, D, G, and F1 landed on branch `phase-3-candidate-recall`. The shortlist
+is now filled to five candidates with evidence-free fillers
+(`source="filler"`, `prior=0.0`), and the harness reports both an **evidenced**
+recall series (real L1/L2 candidates only) and a combined series. Total Gemini
+spend for the two four-configuration passes: roughly $1.57 ($0.7814 pre-refit,
+$0.7836 post-refit). Artifacts:
+`data/benchmarks/results/bench_runs_20260821T195500Z_pre_refit.txt` and
+`bench_runs_20260821T151500Z_post_refit.txt`.
+
+The refit was done between the two passes on 3,021 persisted adjudication rows
+(410 positive, 13.6% base rate) from the pre-refit pass. Out-of-fold AUC
+~0.669 and Brier ~0.114 (5-fold CV averaged over 5 seeds). New coefficients:
+`a0=-5.3395 a1=0.0077 a2=-1.4268 a3=-0.4531 a4=-0.4575 a5=0.8888 a6=1.3492
+a7=2.5913 a8=0.7388 a9=-1.8539 a10=0.7661`.
+
+Candidate recall is measured before adjudication, so it is identical pre- and
+post-refit. The refit changed only abstention, exact/step accuracy, and Brier.
+
+TRAIL recall@5 is materially below the 0.43 the pre-phase strategy table
+suggested. Diagnostic: an offline replay of `candidates.py::merge_candidates`
+against the persisted rows produced exactly the same filler step choices the
+pipeline emitted (0 mismatches across 616 diagnoses), so the gap is not a
+wiring bug. The 0.43 figure came from a simplified "5 LLM-kind steps spread
+evenly" calculation that ignores (a) real candidates occupying shortlist slots
+and (b) the per-case denominator used by the harness; the actual combined
+per-case recall@5 on TRAIL is 0.303.
+
+| TRAIL all 763 annotated errors | pre-refit | post-refit | delta |
+|---|---:|---:|---:|
+| Abstention rate | 0.519 | 0.561 | +0.042 |
+| Exact step accuracy | 0.021 | 0.038 | +0.017 |
+| Joint accuracy | 0.000 | 0.003 | +0.003 |
+| Tolerance accuracy @3 | 0.284 | 0.232 | -0.052 |
+| Candidate recall combined @1 / @3 / @5 | 0.016 / 0.111 / 0.303 | 0.016 / 0.111 / 0.303 | 0 / 0 / 0 |
+| Candidate recall evidenced @1 / @3 / @5 | 0.016 / 0.084 / 0.085 | 0.016 / 0.084 / 0.085 | 0 / 0 / 0 |
+| Brier | 0.066 | 0.094 | +0.028 |
+
+TRAIL earliest annotated error only (129 primary cases): pre abstention 0.465,
+exact 0.000, combined recall@5 0.310; post abstention 0.574, exact 0.016,
+combined recall@5 0.310.
+
+| Who&When all 184 cases | pre-refit | post-refit | delta |
+|---|---:|---:|---:|
+| Abstention rate | 0.886 | 0.620 | -0.266 |
+| Exact step accuracy | 0.005 | 0.027 | +0.022 |
+| Joint accuracy | 0.000 | 0.005 | +0.005 |
+| Tolerance accuracy @3 | 0.038 | 0.185 | +0.147 |
+| Candidate recall combined @1 / @3 / @5 | 0.034 / 0.274 / 0.458 | 0.034 / 0.274 / 0.458 | 0 / 0 / 0 |
+| Candidate recall evidenced @1 / @3 / @5 | 0.034 / 0.034 / 0.034 | 0.034 / 0.034 / 0.034 | 0 / 0 / 0 |
+| Brier | 0.072 | 0.092 | +0.020 |
+
+L2 ablation delta pre- vs post-refit is essentially zero on candidate recall,
+matching the earlier finding that L2 abstains `insufficient_references` on real
+traces. Removing L2 slightly raises TRAIL exact accuracy post-refit
+(0.038 -> 0.047) because the saved contrastive work changes which five fillers
+are chosen, but combined recall@5 stays 0.303.
+
+The post-refit coefficients did not fix the calibration inversion recorded
+above; if anything they deepened it (see the updated table in the "L3
+adjudication" section).
 
 ## What was verified vs what remains unverified
 

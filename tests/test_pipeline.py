@@ -179,8 +179,15 @@ def test_diagnose_degrades_l2_instead_of_crashing_when_contrast_raises(monkeypat
 
 def _verdict_call_fn(step_index: int):
     def _call(model, prompt):
+        # Only self-report the true injected step as the root cause. The prompt
+        # names the candidate under judgment with the same phrase the adjudicate
+        # tests use ("whether step N is where"); every other candidate must
+        # return is_root_cause=False so L3's select_diagnosis cannot promote a
+        # filler to the committed verdict.
+        judged = _judged_step(prompt)
+        is_root_cause = judged == step_index
         raw = json.dumps({
-            "is_root_cause": True,
+            "is_root_cause": is_root_cause,
             "failure_class": FailureClass.SILENT_EMPTY_RESULT_MISREAD.value,
             "confidence": 0.95,
             "rationale": f"step {step_index} returned an empty result the agent treated as success",
@@ -191,29 +198,31 @@ def _verdict_call_fn(step_index: int):
     return _call
 
 
+def _judged_step(prompt: str) -> int:
+    """Parses the candidate step index from an adjudication prompt."""
+    marker = "whether step "
+    start = prompt.index(marker) + len(marker)
+    end = prompt.index(" is where", start)
+    return int(prompt[start:end])
+
+
 def test_diagnose_wires_l3_and_commits_a_well_supported_root_cause(monkeypatch):
     """End-to-end proof that L1's signal, L2's clean-empty result, and L3's
     adjudication are really chained through merge_candidates -> adjudicate ->
     select_diagnosis.
 
-    Third revision of this test's expected outcome (see CLAUDE.md's "L3
-    adjudication" section for the full history). It originally asserted a
-    commit; I7's 4-feature fit found the confidence ceiling (~0.29) sat
-    below the 0.55 floor, so it was rewritten to assert unconditional
-    abstention, correctly, for that model. The 2026-08-17 richer-feature
-    refit changed both sides of that comparison: the floor dropped to 0.15
-    (chosen from a precision-at-threshold table, not restored to its old
-    value) and the model's ceiling rose to ~0.83-0.91 over the realistic
-    input domain (ranked/positioned/deep/well-corroborated candidates can
-    now clear the floor). This scenario - the same injected fault and synth
-    seed as before, moved later in the trace (`at_step=7` instead of `1`,
-    `step_position` normalizes higher for a later step) - now genuinely
-    clears it: prior=0.6, agreement=True, evidence_density=1.0, rank=1
-    (only candidate), step_position≈0.89, depth_norm=1.0, n_l1_signals=1,
-    is_fallback=False produces calibrated_confidence≈0.342, comfortably
-    above 0.15. This was verified by direct computation before being
-    written here, not guessed at - see this task's refit script under
-    `data/benchmarks/results/` for the same feature-derivation logic.
+    Fourth revision (2026-08-21 refit, see CLAUDE.md's "L3 adjudication"
+    section for the full history). The 2026-08-17 fit allowed this scenario
+    to clear the 0.15 floor, but its fake LLM returned `is_root_cause=True`
+    for every candidate. The 2026-08-21 refit made `is_filler` positive
+    (a10=0.7661), so a filler that also self-reported root-cause would beat
+    the true candidate. This revision makes the fake LLM parse the candidate
+    under judgment from the prompt and only self-report `is_root_cause=True`
+    for the injected step, turning the assertion into a wiring test:
+    select_diagnosis must commit the single self-reported root cause rather
+    than promote a higher-scoring filler. The calibrated confidence range
+    assertion still verifies the refit model does not abstain on the true
+    candidate in this scenario.
     """
     base = successful_run(seed=8)
     run, step_index = inject(base, "empty_tool_result", at_step=7)

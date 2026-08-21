@@ -1,0 +1,97 @@
+F2 post-refit benchmark pass started 20260821T201520Z
+CULPRIT_MODEL=gemini/gemini-2.5-flash-lite
+
+--- starting trail ---
+=== trail ===
+traces=129  total_cost_usd=$0.1555
+-- all annotated errors (n_cases=763) --
+  abstention_rate=0.561
+  exact_accuracy=0.038  joint_accuracy=0.003
+  tolerance_accuracy: @0=0.038  @1=0.149  @3=0.232
+  class_accuracy=0.012  span_accuracy=0.038
+  earliness_error=6.215
+  candidate_recall (combined): @1=0.016  @3=0.111  @5=0.303
+  candidate_recall (evidenced): @1=0.016  @3=0.084  @5=0.085
+  brier=0.094  ece=0.126
+-- earliest error only (n_cases=129) --
+  abstention_rate=0.574
+  exact_accuracy=0.016  joint_accuracy=0.000
+  tolerance_accuracy: @0=0.016  @1=0.078  @3=0.186
+  class_accuracy=0.008  span_accuracy=0.016
+  earliness_error=8.945
+  candidate_recall (combined): @1=0.008  @3=0.140  @5=0.310
+  candidate_recall (evidenced): @1=0.008  @3=0.047  @5=0.047
+  brier=0.065  ece=0.164
+
+--- starting who_and_when ---
+=== who_and_when ===
+traces=184  total_cost_usd=$0.2370
+-- all annotated errors (n_cases=184) --
+  abstention_rate=0.620
+  exact_accuracy=0.027  joint_accuracy=0.005
+  tolerance_accuracy: @0=0.027  @1=0.114  @3=0.185
+  class_accuracy=0.005  span_accuracy=0.027
+  earliness_error=2.471
+  candidate_recall (combined): @1=0.034  @3=0.274  @5=0.458
+  candidate_recall (evidenced): @1=0.034  @3=0.034  @5=0.034
+  brier=0.092  ece=0.150
+-- earliest error only (n_cases=184) --
+  abstention_rate=0.620
+  exact_accuracy=0.027  joint_accuracy=0.005
+  tolerance_accuracy: @0=0.027  @1=0.114  @3=0.185
+  class_accuracy=0.005  span_accuracy=0.027
+  earliness_error=2.471
+  candidate_recall (combined): @1=0.034  @3=0.274  @5=0.458
+  candidate_recall (evidenced): @1=0.034  @3=0.034  @5=0.034
+  brier=0.092  ece=0.150
+
+--- starting trail --ablate l2 ---
+=== trail --ablate l2 ===
+traces=129  total_cost_usd=$0.1550
+-- all annotated errors (n_cases=763) --
+  abstention_rate=0.528
+  exact_accuracy=0.047  joint_accuracy=0.000
+  tolerance_accuracy: @0=0.047  @1=0.134  @3=0.229
+  class_accuracy=0.010  span_accuracy=0.047
+  earliness_error=7.786
+  candidate_recall (combined): @1=0.016  @3=0.111  @5=0.303
+  candidate_recall (evidenced): @1=0.016  @3=0.084  @5=0.085
+  brier=0.099  ece=0.103
+-- earliest error only (n_cases=129) --
+  abstention_rate=0.527
+  exact_accuracy=0.008  joint_accuracy=0.000
+  tolerance_accuracy: @0=0.008  @1=0.085  @3=0.233
+  class_accuracy=0.008  span_accuracy=0.008
+  earliness_error=9.852
+  candidate_recall (combined): @1=0.008  @3=0.140  @5=0.310
+  candidate_recall (evidenced): @1=0.008  @3=0.047  @5=0.047
+  brier=0.049  ece=0.179
+
+--- starting who_and_when --ablate l2 ---
+=== who_and_when --ablate l2 ===
+traces=184  total_cost_usd=$0.2360
+-- all annotated errors (n_cases=184) --
+  abstention_rate=0.560
+  exact_accuracy=0.022  joint_accuracy=0.000
+  tolerance_accuracy: @0=0.022  @1=0.125  @3=0.212
+  class_accuracy=0.005  span_accuracy=0.022
+  earliness_error=3.457
+  candidate_recall (combined): @1=0.034  @3=0.274  @5=0.458
+  candidate_recall (evidenced): @1=0.034  @3=0.034  @5=0.034
+  brier=0.081  ece=0.172
+-- earliest error only (n_cases=184) --
+  abstention_rate=0.560
+  exact_accuracy=0.022  joint_accuracy=0.000
+  tolerance_accuracy: @0=0.022  @1=0.125  @3=0.212
+  class_accuracy=0.005  span_accuracy=0.022
+  earliness_error=3.457
+  candidate_recall (combined): @1=0.034  @3=0.274  @5=0.458
+  candidate_recall (evidenced): @1=0.034  @3=0.034  @5=0.034
+  brier=0.081  ece=0.172
+
+=== F2 post-refit summary ===
+total_cost_usd=$0.7836
+trail: combined@5=0.303 evidenced@5=0.085 exact=0.038 joint=0.003 abstention=0.561 brier=0.094
+who_and_when: combined@5=0.458 evidenced@5=0.034 exact=0.027 joint=0.005 abstention=0.620 brier=0.092
+trail --ablate l2: combined@5=0.303 evidenced@5=0.085 exact=0.047 joint=0.000 abstention=0.528 brier=0.099
+who_and_when --ablate l2: combined@5=0.458 evidenced@5=0.034 exact=0.022 joint=0.000 abstention=0.560 brier=0.081

@@ -1,19 +1,12 @@
 """Confidence calibration and trace-level abstention for L3 adjudication.
 
-**Eleven coefficients (a0-a10), fitted 2026-08-17 in two passes.** I7 first fit
-`a0-a4` against 447 real adjudication rows on 4 features
-(`model_confidence`, `prior`, `agreement`, `evidence_density`); that fit's
-ceiling (~0.29) sat below the 0.55 floor, so the system abstained on every
-trace. A same-day follow-up found richer, production-available features
-(`Candidate.rank`, step position, step depth, L1 signal count, `is_fallback`)
-lift out-of-fold AUC ~0.61 -> ~0.74 on the same population and hold up on
-TRAIL-only data alone, ruling out the lift being just "which benchmark is
-this" (a dataset-identity feature was tested and deliberately excluded from
-what ships - meaningless on real traffic, which has no such label). This
-module now fits all eleven coefficients on that richer set, floor chosen from a
-precision-at-threshold table. Full history and numbers: CLAUDE.md's "L3
-adjudication" section (46 positives total; TRAIL-only replication is the
-strongest evidence this generalizes, not the full-population AUC alone).
+**Eleven coefficients (a0-a10), refit 2026-08-21 against the persisted rows
+from the Phase 3 pre-refit benchmark pass.** The pre-refit population is larger
+than the 2026-08-17 fit (3,021 rows, 410 positive, from all four benchmark
+configurations after the shortlist was filled to five candidates) and includes
+`is_filler` as an eleventh feature. Out-of-fold AUC is ~0.669 and Brier ~0.114
+(5-fold CV averaged over 5 seeds). Full history, prior fits, and the
+precision-at-threshold table are in CLAUDE.md's "L3 adjudication" section.
 
 `select_diagnosis` implements the plan's three independent abstention
 gates. Uber's "Project RADAR" is the citation CLAUDE.md records for this
@@ -27,30 +20,32 @@ from culprit.signals import Adjudication
 
 # a0 intercept, a1 logit(model_conf), a2 prior, a3 agreement, a4 evidence
 # density, a5 rank score, a6 step position, a7 step depth, a8 L1 signal
-# count, a9 is_fallback, a10 is_filler. Fitted against the same 447-row
-# population as I7 (46 positive) on the richer feature set; see CLAUDE.md's
-# "L3 adjudication" for sample size, CV AUC, and the precision-at-threshold
-# table the floor below was chosen from. `a3` (agreement) came back small and
-# slightly negative here - once rank/position/depth/signal-count are present,
-# matching an L1 category hint carries almost no independent signal, unlike
-# I7's fit where it was one of the two dominant terms. Kept for continuity
-# with `agrees_with_l1`/`adjudicate.py` rather than dropped on one fit.
-# `a10` (is_filler) defaults to 0.0 here so behaviour is unchanged until F2
-# refits against persisted rows that include `source="filler"`.
+# count, a9 is_fallback, a10 is_filler. Refit 2026-08-21 against 3,021
+# persisted adjudication rows (410 positive) from all four benchmark
+# configurations after the shortlist was filled to five candidates; see
+# CLAUDE.md's "L3 adjudication" section for the fit history, the
+# precision-at-threshold table, and the honest caveats about sample size.
+# `a2` (prior) and `a4` (evidence_density) came back negative here: once rank,
+# position, depth, signal-count, and source flags are present, the raw prior
+# and citation density do not carry independent positive signal in this
+# population. `a10` (is_filler) is positive, which partly offsets the low
+# rank_norm and zero-prior penalty of a filler rather than marking it down.
 # Hand-set priors, for reference: a0=0.0, a1=1.0, a2=0.5, a3=0.3, a4=1.5,
-# a5-a9=0.0. I7's 4-feature fit, superseded here: a0=-2.6065, a1=-0.0285,
-# a2=0.7678, a3=0.6492, a4=0.0053.
-DEFAULT_A0 = -4.3970
-DEFAULT_A1 = -0.0482
-DEFAULT_A2 = 0.2273
-DEFAULT_A3 = -0.0892
-DEFAULT_A4 = 0.0020
-DEFAULT_A5 = 0.1206
-DEFAULT_A6 = 2.1086
-DEFAULT_A7 = 1.1989
-DEFAULT_A8 = 0.2925
-DEFAULT_A9 = -1.5935
-DEFAULT_A10 = 0.0
+# a5-a9=0.0. I7's 4-feature fit, superseded: a0=-2.6065, a1=-0.0285,
+# a2=0.7678, a3=0.6492, a4=0.0053. 2026-08-17 richer-feature fit,
+# superseded: a0=-4.3970, a1=-0.0482, a2=0.2273, a3=-0.0892, a4=0.0020,
+# a5=0.1206, a6=2.1086, a7=1.1989, a8=0.2925, a9=-1.5935, a10=0.0.
+DEFAULT_A0 = -5.3395
+DEFAULT_A1 = 0.0077
+DEFAULT_A2 = -1.4268
+DEFAULT_A3 = -0.4531
+DEFAULT_A4 = -0.4575
+DEFAULT_A5 = 0.8888
+DEFAULT_A6 = 1.3492
+DEFAULT_A7 = 2.5913
+DEFAULT_A8 = 0.7388
+DEFAULT_A9 = -1.8539
+DEFAULT_A10 = 0.7661
 
 # Candidate.rank never exceeds candidates.py's own _DEFAULT_MAX_CANDIDATES,
 # duplicated rather than imported (this module never imports outside
