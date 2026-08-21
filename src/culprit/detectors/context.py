@@ -19,7 +19,15 @@ _BUDGET_RUN_LENGTH = 10
 def context_overflow(ctx: DetectorContext) -> list[Signal]:
     """`total_tokens >= 0.9 * max_tokens` on an LLM step, per the plan's
     catalogue entry, which is deliberately model-agnostic: it reads the
-    reported context window rather than hardcoding a per-model table."""
+    reported context window rather than hardcoding a per-model table.
+
+    Inert today: `gen_ai.request.max_tokens` is an output-token cap, not a
+    context-window size, and OpenInference does not report the window either.
+    No real signal reaches `LlmPayload.max_tokens`, so this detector cannot
+    fire on correctly-normalized spans. The measurement behind it: TRAIL's
+    largest observed `total_tokens` is 9,945 tokens against a ~200k window,
+    about 5% of the threshold.
+    """
     signals = []
     for step in ctx.steps:
         if step.kind != SpanKind.LLM:

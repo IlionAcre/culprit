@@ -48,11 +48,11 @@ def test_normalize_span_isolates_a_vocab_module_that_raises_without_propagating(
     JSON in an attribute) must degrade to normalize_error rather than take
     down the whole ingestion batch - per-item error isolation."""
     raw = {
-        "span_id": "s1", "parent_span_id": None, "name": "execute_tool",
+        "span_id": "s1", "parent_span_id": None, "name": "chat",
         "start_ns": 10, "end_ns": 20, "status_code": "STATUS_CODE_OK", "status_message": None,
         "attributes": {
-            "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "x",
-            "gen_ai.tool.call.arguments": "{not valid json",
+            "gen_ai.operation.name": "chat", "gen_ai.provider.name": "openai",
+            "gen_ai.request.model": "gpt-4", "gen_ai.output.messages": "{not valid json",
         },
     }
 
@@ -63,7 +63,7 @@ def test_normalize_span_isolates_a_vocab_module_that_raises_without_propagating(
     assert span.normalize_error is not None
     assert "not valid JSON" in span.normalize_error
     # The raw attributes survive intact even though normalization failed.
-    assert span.attributes["gen_ai.tool.call.arguments"] == "{not valid json"
+    assert span.attributes["gen_ai.output.messages"] == "{not valid json"
 
 
 def test_normalize_span_fallback_maps_error_status_code():

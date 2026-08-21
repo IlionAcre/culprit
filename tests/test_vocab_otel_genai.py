@@ -96,9 +96,7 @@ def test_to_span_maps_an_unrecognized_operation_name_to_unknown_kind_without_rai
     assert span.normalize_error is None
 
 
-def test_to_span_raises_when_tool_call_arguments_are_not_valid_json():
-    """normalize.py is the layer that catches this and degrades to
-    normalize_error; this module is expected to raise here, not swallow it."""
+def test_to_span_builds_tool_payload_when_tool_call_arguments_are_not_valid_json():
     raw = {
         "span_id": "s1", "parent_span_id": None, "name": "execute_tool", "start_ns": 0, "end_ns": 1,
         "status_code": "STATUS_CODE_OK", "status_message": None,
@@ -108,8 +106,14 @@ def test_to_span_raises_when_tool_call_arguments_are_not_valid_json():
         },
     }
 
-    with pytest.raises(ValueError, match="not valid JSON"):
-        otel_genai.to_span(raw, "t1")
+    span = otel_genai.to_span(raw, "t1")
+
+    assert span.kind == SpanKind.TOOL
+    assert isinstance(span.payload, ToolPayload)
+    assert span.payload.arguments == {}
+    assert span.payload.arguments_json == "{not json"
+    assert span.payload.tool_name == "x"
+    assert span.normalize_error is None
 
 
 def test_vocab_dataclass_instance_matches_and_normalizes_the_same_as_the_module_functions():

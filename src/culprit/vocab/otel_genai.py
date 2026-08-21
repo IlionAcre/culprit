@@ -84,7 +84,7 @@ def _llm_payload(attrs: dict) -> LlmPayload:
         tool_calls=_tool_calls_from(response_items),
         finish_reason=finish_reasons[0] if finish_reasons else None,
         prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
-        total_tokens=total_tokens, max_tokens=attrs.get("gen_ai.request.max_tokens"),
+        total_tokens=total_tokens,
         temperature=attrs.get("gen_ai.request.temperature"),
     )
 
@@ -93,8 +93,8 @@ def _tool_payload(attrs: dict, is_error: bool, error_message: str | None) -> Too
     arguments_json = attrs.get("gen_ai.tool.call.arguments") or "{}"
     try:
         arguments = json.loads(arguments_json) if arguments_json else {}
-    except json.JSONDecodeError as e:
-        raise ValueError(f"tool call arguments are not valid JSON: {e}") from e
+    except json.JSONDecodeError:
+        arguments = {}
     result_text = attrs.get("gen_ai.tool.call.result", "")
     return ToolPayload(
         tool_name=attrs.get("gen_ai.tool.name", "unknown"),

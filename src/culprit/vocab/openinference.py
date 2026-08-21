@@ -120,8 +120,8 @@ def _tool_payload(attrs: dict, is_error: bool, error_message: str | None) -> Too
     arguments_json = attrs.get("input.value") or "{}"
     try:
         arguments = json.loads(arguments_json) if arguments_json else {}
-    except json.JSONDecodeError as e:
-        raise ValueError(f"tool input.value is not valid JSON: {e}") from e
+    except json.JSONDecodeError:
+        arguments = {}
     result_text = attrs.get("output.value", "")
     return ToolPayload(
         tool_name=attrs.get("tool.name", "unknown"), call_id=attrs.get("tool.id", ""),

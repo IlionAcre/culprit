@@ -102,12 +102,18 @@ def test_to_span_maps_an_unrecognized_span_kind_to_unknown_without_raising():
     assert span.normalize_error is None
 
 
-def test_to_span_raises_when_tool_input_value_is_not_valid_json():
+def test_to_span_builds_tool_payload_when_input_value_is_not_valid_json():
     raw = {
         "span_id": "s1", "parent_span_id": None, "name": "tool", "start_ns": 0, "end_ns": 1,
         "status_code": "STATUS_CODE_OK", "status_message": None,
         "attributes": {"openinference.span.kind": "TOOL", "tool.name": "x", "input.value": "{not json"},
     }
 
-    with pytest.raises(ValueError, match="not valid JSON"):
-        openinference.to_span(raw, "t1")
+    span = openinference.to_span(raw, "t1")
+
+    assert span.kind == SpanKind.TOOL
+    assert isinstance(span.payload, ToolPayload)
+    assert span.payload.arguments == {}
+    assert span.payload.arguments_json == "{not json"
+    assert span.payload.tool_name == "x"
+    assert span.normalize_error is None
