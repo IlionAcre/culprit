@@ -98,7 +98,10 @@ def low_score_retrieval(ctx: DetectorContext) -> list[Signal]:
 def goal_token_drift(ctx: DetectorContext) -> list[Signal]:
     """The retrieval query's own vocabulary barely appears in the task
     goal: the agent is searching for something unrelated to what it was
-    asked to do."""
+    asked to do.
+    On TRAIL `trail.py` sets `task_goal=None` because TRAIL's schema carries
+    no goal field, so the empty-goal early-out is correct and this detector
+    is inert there."""
     signals = []
     if not ctx.goal_terms:
         return signals

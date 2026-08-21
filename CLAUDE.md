@@ -228,6 +228,19 @@ why the detector catalogue is versioned and independently testable.
   and is the reason this per-detector test requirement is strict rather than
   aspirational.
 
+- **The catalogue is structural and tool-centric; the real ground truth is
+  not.** All 20 L1 detectors were built against `synth.py`, but 89.5% of
+  TRAIL ground-truth error spans sit on LLM-kind spans (Formatting Errors,
+  Instruction Non-compliance, Goal Deviation) and 98.9% of Who&When ground
+  truth is not a tool turn. Four detectors are therefore inert against 2026
+  real-world instrumentation; their modules document why:
+  `output_schema_violation` (no `response_format_schema` attribute in either
+  vocabulary), `duplicate_delegation` (no ratified delegation attribute;
+  `_agent_payload` hardcodes `delegated_to=[]`), `missing_verification`
+  (string-matches the synthetic tool names `verify_eligibility` and
+  `process_refund`), and `goal_token_drift` on TRAIL (`trail.py` sets
+  `task_goal=None`, so the empty-goal early-out is correct).
+
 ### L2 contrastive (the differentiator)
 
 LinkedIn's **"Using deep learning to detect abusive sequences of member
@@ -297,6 +310,38 @@ problem as detecting an anomalous step sequence in an agent trace.
 - **Candidates merge L1 and L2 by step index, with a co-location bonus**
   (`+0.15` when both sources fire, capped at 1.0). The bonus is the point of
   running two independent layers instead of one.
+
+- **The "five candidates per trace" design was intent, not behaviour, until
+  Phase 3.** `candidates.py::merge_candidates` truncated to `max_candidates`
+  (5) and never padded up to it. Real traces reached L3 with 1 to 3
+  candidates, leaving the budget unspent. That shortfall, not L3 adjudication
+  quality, is the dominant cause of the 85.9% candidate-recall failure:
+
+  | Strategy | TRAIL recall@5 | Who&When recall@5 |
+  |---|---:|---:|
+  | Measured system today | 0.078 | 0.037 |
+  | Always blame the terminal step (1 candidate) | 0.059 | 0.043 |
+  | 5 steps chosen at random | 0.367 | 0.489 |
+  | 5 steps spread evenly across the trace | 0.318 | 0.408 |
+  | 5 LLM-kind steps spread evenly | 0.429 | n/a |
+
+  Phase 3 fills the unused slots with evidence-free filler candidates
+  (`source="filler"`, `prior=0.0`) that rank last and never displace
+  evidenced candidates. The benchmark now reports both an **evidenced**
+  recall series (real L1/L2 candidates only) and a combined series.
+
+- **Confidence calibration is currently inverted against real trace shape.**
+  The fitted coefficients reward deep, late positions more than evidence:
+
+  | Candidate | Calibrated | Outcome |
+  |---|---:|---|
+  | Zero-evidence filler, last step, deepest nesting | 0.232 | commits |
+  | Zero-evidence filler, last step, mid depth | 0.142 | abstains |
+  | Real L1 candidate: prior 0.7, 2 signals, rank 1, agreement, mid-trace | 0.112 | abstains |
+
+  `a6=2.1086` on `step_position` and `a7=1.1989` on `depth_norm` dominate
+  `a2=0.2273` on `prior`. This is a present-tense defect; Phase 3's filler
+  work exposes it more widely, and the refit in Task F2 is the intended fix.
 
 - **Exactly five candidates per trace, one LLM call each, fanned out with
   `ThreadPoolExecutor(max_workers=4).map()`.** Five, because the whole

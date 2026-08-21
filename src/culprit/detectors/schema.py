@@ -15,7 +15,9 @@ def output_schema_violation(ctx: DetectorContext) -> list[Signal]:
     """An LLM step that declared a `response_format_schema` whose response
     is not valid JSON satisfying that schema's required keys. Clean synth
     steps never set `response_format_schema`, so this can only fire when a
-    step actually opts into structured output and then violates it."""
+    step actually opts into structured output and then violates it.
+    No structured-output-schema attribute exists in either vocabulary as of
+    2026 instrumentation, so this detector is inert on real traces."""
     signals = []
     for step in ctx.steps:
         if step.kind != SpanKind.LLM:

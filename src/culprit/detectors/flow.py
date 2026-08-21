@@ -51,6 +51,10 @@ def missing_verification(ctx: DetectorContext) -> list[Signal]:
     is the whole product), and it is what keeps this detector silent on
     every synthetic success regardless of that run's own verification
     choice.
+
+    String-matches the synthetic tool names `verify_eligibility` and
+    `process_refund`, binding this detector to the synth domain; it is inert
+    on real traces.
     """
     if ctx.trace.outcome != Outcome.FAILURE:
         return []
@@ -75,7 +79,10 @@ def missing_verification(ctx: DetectorContext) -> list[Signal]:
 def duplicate_delegation(ctx: DetectorContext) -> list[Signal]:
     """An AGENT step delegates to the same agent name more than once in one
     delegation call. Clean runs always delegate to a single agent, so a
-    repeat in the list can only come from a genuine duplicate."""
+    repeat in the list can only come from a genuine duplicate.
+    No ratified delegation attribute exists in either vocabulary, and
+    `_agent_payload` hardcodes `delegated_to=[]`, so this detector is inert
+    on real traces."""
     signals = []
     for step in ctx.steps:
         if step.kind != SpanKind.AGENT:
