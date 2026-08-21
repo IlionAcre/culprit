@@ -128,6 +128,7 @@ def _adjudication_from_verdict(
         verdict.confidence, candidate.prior, agreement, density,
         candidate.rank, position, depth, len(candidate.signals),
         candidate.source == "fallback",
+        candidate.source == "filler",
     )
     return Adjudication(
         step_index=candidate.step_index,

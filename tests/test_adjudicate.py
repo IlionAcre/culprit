@@ -20,10 +20,10 @@ def _step(index: int) -> Step:
     )
 
 
-def _candidate(step_index: int) -> Candidate:
+def _candidate(step_index: int, *, source: str = "l1") -> Candidate:
     return Candidate(
         step_index=step_index, span_id=f"span-{step_index}", rank=1, prior=0.6,
-        source="l1", signals=[], divergence=None,
+        source=source, signals=[], divergence=None,
     )
 
 
@@ -217,3 +217,50 @@ def test_adjudicate_max_workers_one_runs_sequentially_with_the_same_result():
     )
 
     assert result[0].is_root_cause is True
+
+
+def test_adjudicate_preserves_candidate_source_on_the_adjudication():
+    """`source` is a stored fact (Task G), not reconstructed; it must be
+    carried unchanged from Candidate to Adjudication for every source kind."""
+    steps = [_step(i) for i in range(3)]
+
+    for source in ("l1", "l2", "both", "fallback", "filler"):
+        result = adjudicate(
+            [_candidate(1, source=source)], _trace(), steps,
+            call_fn=lambda m, p: (_verdict_json(1), 1.0, 0.0, 10, 5), model="m",
+        )
+        assert result[0].source == source
+
+
+def test_adjudicate_does_not_change_calibrated_confidence_for_filler_when_a10_is_zero():
+    """`is_filler` defaults to coefficient 0.0, so a filler candidate with
+    otherwise identical features must calibrate to the same value as a real
+    candidate."""
+    steps = [_step(i) for i in range(3)]
+
+    real = adjudicate(
+        [_candidate(1, source="l1")], _trace(), steps,
+        call_fn=lambda m, p: (_verdict_json(1), 1.0, 0.0, 10, 5), model="m",
+    )[0]
+    filler = adjudicate(
+        [_candidate(1, source="filler")], _trace(), steps,
+        call_fn=lambda m, p: (_verdict_json(1), 1.0, 0.0, 10, 5), model="m",
+    )[0]
+
+    assert filler.calibrated_confidence == real.calibrated_confidence
+
+
+def test_adjudicate_preserves_source_on_a_sentinel_abstained_adjudication():
+    """Per-item error isolation must not drop the source fact when a candidate
+    call fails."""
+    steps = [_step(i) for i in range(3)]
+
+    def call_fn(model, prompt):
+        raise RuntimeError("boom")
+
+    result = adjudicate(
+        [_candidate(1, source="filler")], _trace(), steps, call_fn=call_fn, model="m",
+    )
+
+    assert result[0].abstained is True
+    assert result[0].source == "filler"

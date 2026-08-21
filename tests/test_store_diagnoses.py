@@ -8,10 +8,13 @@ proving the real thing, skipping cleanly when `CULPRIT_TEST_DSN` is unset.
 
 import contextlib
 import datetime as dt
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
-from culprit.signals import Evidence
+from culprit.signals import Adjudication, Evidence
 from culprit.store_diagnoses import (
     _adjudication_from_row,
     _divergence_from_row,
@@ -22,6 +25,22 @@ from culprit.store_diagnoses import (
 )
 from culprit.synth_results import make_diagnosis, make_divergence, make_signal
 from tests.conftest import requires_db
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _ensure_alembic_head() -> None:
+    """Make sure the live database is at migration head before a test that
+    relies on columns added after revision 0002. Earlier migration tests are
+    allowed to downgrade to specific revisions; this local guard prevents
+    that from breaking storage round-trip tests."""
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=_REPO_ROOT,
+        check=True,
+        capture_output=True,
+    )
+
 
 # --- offline: fake connection/cursor -----------------------------------
 
@@ -148,6 +167,32 @@ def test_adjudication_from_row_defaults_null_rationale_and_counterfactual():
     assert adjudication.rationale == ""
     assert adjudication.counterfactual == ""
     assert adjudication.cited_step_indices == []
+    assert adjudication.source == "unknown"
+
+
+def test_adjudication_from_row_reconstructs_source():
+    row = {
+        "step_index": 2,
+        "span_id": "s2",
+        "is_root_cause": True,
+        "failure_class": "tool_error",
+        "confidence": 0.8,
+        "calibrated_confidence": 0.7,
+        "rationale": "r",
+        "counterfactual": "c",
+        "cited_step_indices": [],
+        "abstained": False,
+        "model": "gemini/flash",
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "cost_usd": 0.001,
+        "error": None,
+        "source": "filler",
+    }
+
+    adjudication = _adjudication_from_row(row)
+
+    assert adjudication.source == "filler"
 
 
 # --- offline: write_diagnosis SQL shape -----------------------------------
@@ -169,6 +214,40 @@ def test_write_diagnosis_writes_diagnoses_row_plus_all_three_child_tables():
     assert any("INSERT INTO divergences" in s for s in sql_calls)
     # no adjudications passed, so no adjudications INSERT should fire at all
     assert not any("INSERT INTO adjudications" in s for s in sql_calls)
+
+
+def test_write_diagnosis_persists_adjudication_source():
+    """`Candidate.source` must round-trip through the adjudications table,
+    including the new `filler` source and the existing `fallback` source."""
+    adjudications = [
+        Adjudication(
+            step_index=1, span_id="s1", is_root_cause=True,
+            failure_class="tool_error", confidence=0.8,
+            calibrated_confidence=0.7, rationale="r", counterfactual="c",
+            cited_step_indices=[1], abstained=False, model="m",
+            prompt_tokens=10, completion_tokens=5, cost_usd=0.001,
+            error=None, source="filler",
+        ),
+        Adjudication(
+            step_index=2, span_id="s2", is_root_cause=False,
+            failure_class="fallback", confidence=0.0,
+            calibrated_confidence=0.0, rationale="", counterfactual="",
+            cited_step_indices=[], abstained=True, model="m",
+            prompt_tokens=None, completion_tokens=None, cost_usd=None,
+            error=None, source="fallback",
+        ),
+    ]
+    diagnosis = make_diagnosis(adjudications=adjudications)
+    conn = _FakeConnection()
+
+    write_diagnosis(_conn_fn(conn), diagnosis)
+
+    sql_calls = [sql for sql, _ in conn.cur.calls]
+    assert any("INSERT INTO adjudications" in s for s in sql_calls)
+    # find the adjudications executemany and check both source values were passed
+    seq = next(seq for sql, seq in conn.cur.calls if "INSERT INTO adjudications" in sql)
+    sources = [row[-1] for row in seq]
+    assert sources == ["filler", "fallback"]
 
 
 def test_write_diagnosis_skips_empty_child_tables_entirely():
@@ -282,6 +361,62 @@ def test_round_trip_write_then_read_diagnosis_reproduces_every_list(db_conn_fn):
     assert len(result[0].signals) == 2
     assert len(result[0].divergences) == 1
     assert result[0].layer_versions == diagnosis.layer_versions
+
+
+@requires_db
+def test_round_trip_preserves_adjudication_source(db_conn_fn):
+    """A persisted adjudication row must carry a non-null `source` for every
+    candidate, including `filler` and `fallback`."""
+    _ensure_alembic_head()
+    adjudications = [
+        Adjudication(
+            step_index=1, span_id="s1", is_root_cause=True,
+            failure_class="tool_error", confidence=0.8,
+            calibrated_confidence=0.7, rationale="r", counterfactual="c",
+            cited_step_indices=[1], abstained=False, model="m",
+            prompt_tokens=10, completion_tokens=5, cost_usd=0.001,
+            error=None, source="l1",
+        ),
+        Adjudication(
+            step_index=2, span_id="s2", is_root_cause=False,
+            failure_class="unknown", confidence=0.0,
+            calibrated_confidence=0.0, rationale="", counterfactual="",
+            cited_step_indices=[], abstained=True, model="m",
+            prompt_tokens=None, completion_tokens=None, cost_usd=None,
+            error=None, source="filler",
+        ),
+        Adjudication(
+            step_index=3, span_id="s3", is_root_cause=False,
+            failure_class="unknown", confidence=0.0,
+            calibrated_confidence=0.0, rationale="", counterfactual="",
+            cited_step_indices=[], abstained=True, model="m",
+            prompt_tokens=None, completion_tokens=None, cost_usd=None,
+            error=None, source="fallback",
+        ),
+    ]
+    diagnosis = make_diagnosis(
+        trace_id="trace-db-1",
+        signals=[],
+        divergences=[],
+        adjudications=adjudications,
+    )
+
+    write_diagnosis(db_conn_fn, diagnosis)
+    result = read_diagnoses(db_conn_fn, "trace-db-1")[0]
+
+    by_step = {a.step_index: a for a in result.adjudications}
+    assert by_step[1].source == "l1"
+    assert by_step[2].source == "filler"
+    assert by_step[3].source == "fallback"
+
+    # The database column itself must be non-null for the rows we just wrote.
+    with db_conn_fn().cursor() as cur:
+        cur.execute(
+            "SELECT source FROM adjudications WHERE diagnosis_id = %s ORDER BY step_index",
+            (diagnosis.diagnosis_id,),
+        )
+        rows = cur.fetchall()
+    assert [r[0] for r in rows] == ["l1", "filler", "fallback"]
 
 
 @requires_db

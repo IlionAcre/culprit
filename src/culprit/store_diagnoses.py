@@ -143,8 +143,8 @@ def write_diagnosis(conn_fn: ConnFn, diagnosis: Diagnosis) -> None:
                         is_root_cause, failure_class, confidence,
                         calibrated_confidence, rationale, counterfactual,
                         cited_step_indices, abstained, model, prompt_tokens,
-                        completion_tokens, cost_usd, error
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        completion_tokens, cost_usd, error, source
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     """,
                     [
                         (
@@ -165,6 +165,7 @@ def write_diagnosis(conn_fn: ConnFn, diagnosis: Diagnosis) -> None:
                             a.completion_tokens,
                             a.cost_usd,
                             a.error,
+                            a.source,
                         )
                         for a in diagnosis.adjudications
                     ],
@@ -247,6 +248,7 @@ def _adjudication_from_row(row: dict[str, Any]) -> Adjudication:
         completion_tokens=row["completion_tokens"],
         cost_usd=row["cost_usd"],
         error=row["error"],
+        source=row.get("source") or "unknown",
     )
 
 

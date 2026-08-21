@@ -1,6 +1,6 @@
 """Confidence calibration and trace-level abstention for L3 adjudication.
 
-**Ten coefficients (a0-a9), fitted 2026-08-17 in two passes.** I7 first fit
+**Eleven coefficients (a0-a10), fitted 2026-08-17 in two passes.** I7 first fit
 `a0-a4` against 447 real adjudication rows on 4 features
 (`model_confidence`, `prior`, `agreement`, `evidence_density`); that fit's
 ceiling (~0.29) sat below the 0.55 floor, so the system abstained on every
@@ -10,7 +10,7 @@ lift out-of-fold AUC ~0.61 -> ~0.74 on the same population and hold up on
 TRAIL-only data alone, ruling out the lift being just "which benchmark is
 this" (a dataset-identity feature was tested and deliberately excluded from
 what ships - meaningless on real traffic, which has no such label). This
-module now fits all ten coefficients on that richer set, floor chosen from a
+module now fits all eleven coefficients on that richer set, floor chosen from a
 precision-at-threshold table. Full history and numbers: CLAUDE.md's "L3
 adjudication" section (46 positives total; TRAIL-only replication is the
 strongest evidence this generalizes, not the full-population AUC alone).
@@ -27,14 +27,16 @@ from culprit.signals import Adjudication
 
 # a0 intercept, a1 logit(model_conf), a2 prior, a3 agreement, a4 evidence
 # density, a5 rank score, a6 step position, a7 step depth, a8 L1 signal
-# count, a9 is_fallback. Fitted against the same 447-row population as I7
-# (46 positive) on the richer feature set; see CLAUDE.md's "L3 adjudication"
-# for sample size, CV AUC, and the precision-at-threshold table the floor
-# below was chosen from. `a3` (agreement) came back small and slightly
-# negative here - once rank/position/depth/signal-count are present,
+# count, a9 is_fallback, a10 is_filler. Fitted against the same 447-row
+# population as I7 (46 positive) on the richer feature set; see CLAUDE.md's
+# "L3 adjudication" for sample size, CV AUC, and the precision-at-threshold
+# table the floor below was chosen from. `a3` (agreement) came back small and
+# slightly negative here - once rank/position/depth/signal-count are present,
 # matching an L1 category hint carries almost no independent signal, unlike
 # I7's fit where it was one of the two dominant terms. Kept for continuity
 # with `agrees_with_l1`/`adjudicate.py` rather than dropped on one fit.
+# `a10` (is_filler) defaults to 0.0 here so behaviour is unchanged until F2
+# refits against persisted rows that include `source="filler"`.
 # Hand-set priors, for reference: a0=0.0, a1=1.0, a2=0.5, a3=0.3, a4=1.5,
 # a5-a9=0.0. I7's 4-feature fit, superseded here: a0=-2.6065, a1=-0.0285,
 # a2=0.7678, a3=0.6492, a4=0.0053.
@@ -48,6 +50,7 @@ DEFAULT_A6 = 2.1086
 DEFAULT_A7 = 1.1989
 DEFAULT_A8 = 0.2925
 DEFAULT_A9 = -1.5935
+DEFAULT_A10 = 0.0
 
 # Candidate.rank never exceeds candidates.py's own _DEFAULT_MAX_CANDIDATES,
 # duplicated rather than imported (this module never imports outside
@@ -149,6 +152,7 @@ def calibrate_confidence(
     depth_norm: float,
     n_l1_signals: int,
     is_fallback: bool,
+    is_filler: bool = False,
     *,
     max_candidates: int = _DEFAULT_MAX_CANDIDATES,
     a0: float = DEFAULT_A0,
@@ -161,19 +165,22 @@ def calibrate_confidence(
     a7: float = DEFAULT_A7,
     a8: float = DEFAULT_A8,
     a9: float = DEFAULT_A9,
+    a10: float = DEFAULT_A10,
 ) -> float:
     """`calibrated = sigmoid(a0 + a1*logit(model_conf) + a2*prior +
     a3*agreement + a4*evidence_density + a5*rank_score(rank) +
     a6*step_position + a7*depth_norm + a8*n_l1_signals +
-    a9*is_fallback)`.
+    a9*is_fallback + a10*is_filler)`.
 
     `step_position` and `depth_norm` are pre-normalized floats (this
     module's own `step_position()`/`depth_norm()` functions above build
     them from a `Step`/`Trace`); `rank` is the raw 1-based
     `Candidate.rank` and is normalized internally by `_rank_score`, since
     unlike the other new terms it is not already a [0,1] quantity at the
-    call site. See module docstring for the fit this formula and its
-    coefficients came from."""
+    call site. `is_filler` joins the fit in Phase 3 so the refit can learn
+    the value of evidence-free filler candidates rather than have the
+    position terms absorb it. See module docstring for the fit this formula
+    and its coefficients came from."""
     x = (
         a0
         + a1 * _logit(model_confidence)
@@ -185,6 +192,7 @@ def calibrate_confidence(
         + a7 * depth_norm
         + a8 * n_l1_signals
         + a9 * (1.0 if is_fallback else 0.0)
+        + a10 * (1.0 if is_filler else 0.0)
     )
     return _sigmoid(x)
 

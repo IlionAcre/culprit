@@ -11,6 +11,7 @@ from culprit.confidence import (
     DEFAULT_A7,
     DEFAULT_A8,
     DEFAULT_A9,
+    DEFAULT_A10,
     agrees_with_l1,
     calibrate_confidence,
     cite_check,
@@ -53,6 +54,7 @@ def test_default_coefficients_are_the_richer_feature_refit_values():
     assert DEFAULT_A7 == pytest.approx(1.1989)
     assert DEFAULT_A8 == pytest.approx(0.2925)
     assert DEFAULT_A9 == pytest.approx(-1.5935)
+    assert DEFAULT_A10 == pytest.approx(0.0)
 
 
 def test_default_coefficients_now_weight_step_position_and_depth_over_the_original_four_features():
@@ -94,7 +96,7 @@ def test_cite_check_returns_zero_for_an_empty_citation_list():
 # feature it names. rank=1 (top), step_position=0.5, depth_norm=0.3,
 # n_l1_signals=1, is_fallback=False are all mid-range/typical values.
 
-_BASE_KW = dict(rank=1, step_position=0.5, depth_norm=0.3, n_l1_signals=1, is_fallback=False)
+_BASE_KW = dict(rank=1, step_position=0.5, depth_norm=0.3, n_l1_signals=1, is_fallback=False, is_filler=False)
 
 
 def test_calibrated_confidence_increases_with_higher_evidence_density():
@@ -163,6 +165,34 @@ def test_calibrated_confidence_decreases_for_a_fallback_candidate():
                                      depth_norm=0.3, n_l1_signals=1, is_fallback=True)
 
     assert fallback < real
+
+
+def test_calibrated_confidence_is_unchanged_for_a_filler_candidate_when_a10_is_zero():
+    """`is_filler` joins the fit with a default coefficient of 0.0 so
+    behaviour is identical to today until F2 refits."""
+    real = calibrate_confidence(0.7, 0.5, False, 0.5, rank=1, step_position=0.5,
+                                 depth_norm=0.3, n_l1_signals=1, is_fallback=False,
+                                 is_filler=False)
+    filler = calibrate_confidence(0.7, 0.5, False, 0.5, rank=1, step_position=0.5,
+                                   depth_norm=0.3, n_l1_signals=1, is_fallback=False,
+                                   is_filler=True)
+
+    assert filler == pytest.approx(real)
+
+
+def test_calibrated_confidence_decreases_for_a_filler_candidate_when_a10_is_negative():
+    """A negative a10 mirrors is_fallback: fillers are evidence-free by
+    construction and should score lower than an otherwise identical real
+    candidate. This is the expected direction; F2's refit will pin the real
+    value."""
+    real = calibrate_confidence(0.7, 0.5, False, 0.5, rank=1, step_position=0.5,
+                                 depth_norm=0.3, n_l1_signals=1, is_fallback=False,
+                                 is_filler=False, a10=-1.0)
+    filler = calibrate_confidence(0.7, 0.5, False, 0.5, rank=1, step_position=0.5,
+                                   depth_norm=0.3, n_l1_signals=1, is_fallback=False,
+                                   is_filler=True, a10=-1.0)
+
+    assert filler < real
 
 
 def test_calibrate_confidence_never_raises_at_model_confidence_boundaries():
