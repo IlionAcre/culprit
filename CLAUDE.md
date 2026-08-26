@@ -475,13 +475,23 @@ problem as detecting an anomalous step sequence in an agent trace.
   filler are both evidence-free and both excluded from the evidenced series.
 
 - **The podman shutdown during Phase 3 review made the LLM-dependent numbers
-  unreproducible.** Both `culprit` and `culprit_test` databases remain at
-  Alembic revision `0002` with no `source` column, while migration `0003` is
-  committed in the repo and unapplied. The `a0`-`a10` fit script was never
-  committed either. What survives is the candidate-recall series, because the
-  new offline L1 harness regenerates it from raw annotations with no database
-  and no LLM. Any future run that needs persisted benchmark data must apply
-  `0003` first.
+  unreproducible.** Both `culprit` and `culprit_test` databases were at
+  Alembic revision `0002` with no `source` column, while migration `0003` was
+  committed in the repo and unapplied. QA started the containers on
+  2026-08-26 and found the earlier agent's "no container found" was a
+  rootless-vs-rootful mistake: the containers live under rootful podman in the
+  WSL `podman-machine-default` distro (`podman machine ssh -- sudo podman ps
+  -a` sees them; rootless `wsl -d podman-machine-default -- podman ps -a` does
+  not). The `culprit` database held only 467 adjudications / 316 diagnoses /
+  947 benchmark_cases at `0002`; `culprit_test` held 0/0/0. The Phase 3
+  pre-refit population of ~3,021 adjudication rows is not recoverable, so Task
+  D (monotone calibration refit) stays blocked. Migration `0003` was applied
+  to both databases to close the divergence, and the full DSN-gated suite
+  passes (581 passed with `CULPRIT_TEST_DSN` set, 562 passed / 19 skipped
+  offline). What survives is the candidate-recall series, because the new
+  offline L1 harness regenerates it from raw annotations with no database and
+  no LLM. Any future run that needs persisted benchmark data must re-generate
+  or import the ~3,021-row population and apply `0003` first.
 
 ### L5 clustering
 
