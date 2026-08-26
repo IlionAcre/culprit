@@ -64,14 +64,23 @@ def _spread_evenly(items: list[Step], used: set[int], count: int) -> list[int]:
     seen: set[int] = set()
     # Spread count points across the available items; use round() so the first
     # and last items are included when count > 1, giving coverage of the trace.
-    for i in range(count):
-        idx = round(i * (len(items) - 1) / (count - 1))
+    # When count == 1 the even-spacing formula has no second point to space
+    # against, so pick the midpoint instead of dividing by zero.
+    if count == 1:
+        idx = len(items) // 2
         step = items[idx]
-        if step.step_index not in used and step.step_index not in seen:
+        if step.step_index not in used:
             chosen.append(step.step_index)
             seen.add(step.step_index)
-    # If duplicates from rounding left us short, greedily fill from the sorted
-    # list, still respecting `used`.
+    else:
+        for i in range(count):
+            idx = round(i * (len(items) - 1) / (count - 1))
+            step = items[idx]
+            if step.step_index not in used and step.step_index not in seen:
+                chosen.append(step.step_index)
+                seen.add(step.step_index)
+    # If duplicates from rounding (or a used midpoint) left us short, greedily
+    # fill from the sorted list, still respecting `used`.
     if len(chosen) < count:
         for s in items:
             if s.step_index not in used and s.step_index not in seen:

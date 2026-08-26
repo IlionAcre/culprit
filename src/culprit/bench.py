@@ -142,7 +142,7 @@ def _case_results(cases: list[BenchmarkCase], diagnosis: Diagnosis | None) -> li
             # Populated even when L3 abstains, because adjudication already ran
             # on a real shortlist; only a pipeline that never ran stays empty.
             candidate_steps=[a.step_index for a in diagnosis.adjudications],
-            evidenced_candidate_steps=[a.step_index for a in diagnosis.adjudications if a.source != "filler"],
+            evidenced_candidate_steps=[a.step_index for a in diagnosis.adjudications if a.source in {"l1", "l2", "both"}],
         ))
     return results
 

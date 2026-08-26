@@ -57,9 +57,10 @@ class CaseResult:
     # adjudication picked among them. Empty means "not measured for this
     # case", excluded from candidate_recall_at_k rather than counted as 0.
     candidate_steps: list[int] = field(default_factory=list)
-    # Subset of candidate_steps whose source is not "filler"; tracked
-    # separately so the evidenced (L1/L2-driven) recall series stays visible
-    # after Task B adds filler padding to the shortlist.
+    # Subset of candidate_steps whose source carries L1/L2 evidence ("l1",
+    # "l2", or "both"). Filler and fallback are both evidence-free and
+    # excluded, so the evidenced recall series measures only detector-driven
+    # narrowing.
     evidenced_candidate_steps: list[int] = field(default_factory=list)
 
 

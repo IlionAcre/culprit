@@ -173,3 +173,57 @@ def test_run_benchmark_calls_recycle_fn_after_writes_not_before(monkeypatch):
     )
 
     assert recycled == [1]
+
+
+def test_fallback_is_not_counted_as_evidence(monkeypatch):
+    """Task E done-when 3: the fallback candidate has no L1/L2 evidence and
+    must be excluded from evidenced_candidate_steps, just like filler."""
+    cases = _cases("t5")
+    adjudications = [
+        Adjudication(
+            step_index=2, span_id="span-2", is_root_cause=True,
+            failure_class="unknown", confidence=0.1, calibrated_confidence=0.1,
+            rationale="", counterfactual="", cited_step_indices=[],
+            abstained=False, model="m", prompt_tokens=None,
+            completion_tokens=None, cost_usd=None, error=None,
+            source="fallback",
+        ),
+        Adjudication(
+            step_index=0, span_id="span-0", is_root_cause=False,
+            failure_class="unknown", confidence=0.1, calibrated_confidence=0.1,
+            rationale="", counterfactual="", cited_step_indices=[],
+            abstained=False, model="m", prompt_tokens=None,
+            completion_tokens=None, cost_usd=None, error=None,
+            source="filler",
+        ),
+        Adjudication(
+            step_index=1, span_id="span-1", is_root_cause=False,
+            failure_class="unknown", confidence=0.1, calibrated_confidence=0.1,
+            rationale="", counterfactual="", cited_step_indices=[],
+            abstained=False, model="m", prompt_tokens=None,
+            completion_tokens=None, cost_usd=None, error=None,
+            source="filler",
+        ),
+    ]
+    diagnosis = make_diagnosis(
+        trace_id="t5", abstained=False,
+        root_cause_step_index=2, root_cause_span_id="span-2",
+        failure_class="unknown", adjudications=adjudications,
+    )
+
+    monkeypatch.setattr(bench, "write_trace", lambda conn_fn, trace, spans, steps: None)
+    monkeypatch.setattr(bench, "write_benchmark_cases", lambda conn_fn, benchmark, cs: None)
+    monkeypatch.setattr(bench, "write_diagnosis", lambda conn_fn, d: None)
+    monkeypatch.setitem(bench.BENCHMARKS, "fake", lambda data: cases)
+    monkeypatch.setattr(bench.pipeline_mod, "diagnose", lambda trace, **kw: diagnosis)
+
+    run = bench.run_benchmark(
+        "fake", data=None, conn_fn=lambda: None,
+        call_fn=lambda *a, **kw: ("out", 1.0, 0.0, 10, 5),
+        embed_fn=lambda texts: [[0.0] * 384 for _ in texts],
+        model="fake-model",
+    )
+
+    assert run.report_all.candidate_recall_at_k[5] == pytest.approx(1.0)
+    assert run.report_all.evidenced_candidate_recall_at_k[5] == pytest.approx(0.0)
+    assert run.report_all.evidenced_candidate_recall_at_k == {1: 0.0, 3: 0.0, 5: 0.0}

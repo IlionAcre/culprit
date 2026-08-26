@@ -1,4 +1,6 @@
-from culprit.candidates import merge_candidates
+from pathlib import Path
+
+from culprit.candidates import _spread_evenly, merge_candidates
 from culprit.schemas import Outcome, SpanKind, Step, Trace
 from culprit.synth_results import make_divergence, make_signal
 
@@ -217,3 +219,76 @@ def test_merge_prefers_llm_kind_steps_then_falls_back_to_semantic_steps():
     assert SpanKind.UNKNOWN not in filler_kinds
     # Both available LLM-kind slots should be used before falling back to TOOL.
     assert SpanKind.LLM in filler_kinds
+
+
+def test_spread_evenly_single_filler_picks_midpoint():
+    """Task E: exactly one filler requested must not divide by zero; it should
+    pick the midpoint of the available items."""
+    steps = [_step(i, SpanKind.LLM) for i in range(6)]
+
+    indices = _spread_evenly(steps, set(), 1)
+
+    assert indices == [3]
+
+
+def test_spread_evenly_single_filler_greedy_top_up_when_midpoint_used():
+    """Task E: when the midpoint is already occupied, count==1 still returns
+    one available index via the existing greedy top-up."""
+    steps = [_step(i, SpanKind.LLM) for i in range(6)]
+
+    indices = _spread_evenly(steps, {3}, 1)
+
+    assert len(indices) == 1
+    assert indices[0] in {0, 1, 2, 4, 5}
+
+
+def test_merge_one_filler_against_many_candidates_does_not_raise():
+    """Task E done-when 1: a trace needing exactly one filler against three
+    or more candidate steps returns five candidates rather than raising.
+
+    The regression is in _spread_evenly(count=1): the even-spacing formula
+    divides by (count - 1), which is zero when a single filler is needed.
+    """
+    steps = [_step(i, SpanKind.LLM) for i in range(6)]
+    signals = [
+        make_signal(step_index=0, severity=0.8),
+        make_signal(step_index=1, severity=0.7),
+        make_signal(step_index=2, severity=0.6),
+        make_signal(step_index=3, severity=0.5),
+    ]
+
+    candidates = merge_candidates(signals, [], _trace(), steps)
+
+    assert len(candidates) == 5
+    assert [c.source for c in candidates[:4]] == ["l1", "l1", "l1", "l1"]
+    assert candidates[4].source == "filler"
+
+
+def test_who_and_when_traces_merge_without_exception():
+    """Task E done-when 2: all 184 Who&When traces merge without exception.
+
+    Before the fix, five traces hit the _spread_evenly division-by-zero and
+    lost their whole shortlist.
+    """
+    from culprit.benchmarks.registry import BENCHMARKS
+    from culprit.run_detectors import run_detectors
+
+    data = Path(__file__).parents[1] / "data" / "benchmarks" / "who_and_when" / "who_and_when_all.json"
+    cases = BENCHMARKS["who_and_when"](data)
+
+    by_trace: dict[tuple[str, int], tuple[Trace, list[Step], dict[str, Span]]] = {}
+    for case in cases:
+        key = (case.trace.trace_id, id(case.trace))
+        if key not in by_trace:
+            by_trace[key] = (case.trace, case.steps, {s.span_id: s for s in case.spans})
+
+    failures = []
+    for trace, steps, spans_by_id in by_trace.values():
+        try:
+            signals = run_detectors(trace, steps, spans_by_id)
+            merge_candidates(signals, [], trace, steps)
+        except Exception as exc:  # noqa: BLE001 - collect all failures for the assertion
+            failures.append((trace.trace_id, str(exc)))
+
+    assert len(by_trace) == 184
+    assert failures == []
