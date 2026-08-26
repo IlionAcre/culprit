@@ -241,6 +241,25 @@ why the detector catalogue is versioned and independently testable.
   `process_refund`), and `goal_token_drift` on TRAIL (`trail.py` sets
   `task_goal=None`, so the empty-goal early-out is correct).
 
+- **L1 evidence loses to evidence-free filler padding on TRAIL, and had no
+  signal at all on Who&When, before Phase 4 (2026-08-26).** Per-candidate
+  on the pre-Task-B harness:
+
+  | Benchmark | Filler candidates | Evidenced candidates |
+  |---|---|---|
+  | TRAIL | 86/365 = **23.6%** | 44/280 = **15.7%** |
+  | Who&When | 76/685 = **11.1%** | 0/109 = **0.0%** |
+
+  The negative `prior` coefficient in `confidence.py` is an honest readout
+  of this gap, not a calibration defect; calibration was therefore deferred
+  until evidence beat filler. The leave-one-out table in the Phase 4 plan
+  showed that removing any one of the existing 20 structural/tool-centric
+  detectors could not close the gap, because every freed slot was refilled
+  by filler that already outperformed the removed detector. The only route
+  was adding a detector that inspects model instructions versus model output.
+  See the dated results entry below for the post-addition numbers and the
+  leave-one-out confirmation.
+
 ### L2 contrastive (the differentiator)
 
 LinkedIn's **"Using deep learning to detect abusive sequences of member
@@ -446,6 +465,23 @@ problem as detecting an anomalous step sequence in an agent trace.
     "Measured results so far" for the post-refit numbers. Calibrating
     confidence better on the minority of traces where the right candidate
     reaches L3 is a real but secondary improvement.
+
+- **Two Phase 3 defects repaired in Phase 4 Task E (2026-08-26).**
+  `candidates.py::_spread_evenly` divided by zero when exactly one filler
+  was requested against two or more candidate steps; it now returns a single
+  midpoint index. `bench.py`'s evidenced selector used `source != "filler"`,
+  which admitted the terminal-step `fallback` candidate (`prior=0.0`, no
+  signals). It now selects `source in {"l1", "l2", "both"}`; fallback and
+  filler are both evidence-free and both excluded from the evidenced series.
+
+- **The podman shutdown during Phase 3 review made the LLM-dependent numbers
+  unreproducible.** Both `culprit` and `culprit_test` databases remain at
+  Alembic revision `0002` with no `source` column, while migration `0003` is
+  committed in the repo and unapplied. The `a0`-`a10` fit script was never
+  committed either. What survives is the candidate-recall series, because the
+  new offline L1 harness regenerates it from raw annotations with no database
+  and no LLM. Any future run that needs persisted benchmark data must apply
+  `0003` first.
 
 ### L5 clustering
 
@@ -957,6 +993,53 @@ are chosen, but combined recall@5 stays 0.303.
 The post-refit coefficients did not fix the calibration inversion recorded
 above; if anything they deepened it (see the updated table in the "L3
 adjudication" section).
+
+**Offline L1 harness results, 2026-08-26 (Phase 4 Task B).** Run with
+`uv run python -m culprit.l1_eval`, no database, no API key. Task B added the
+`instruction_noncompliance` detector; Task E fixed the `_spread_evenly` crash
+and the evidenced selector. These numbers are pre-adjudication candidate
+counts, per candidate, against the same annotated ground truth.
+
+TRAIL: 129 traces, 763 annotated errors.
+
+| Candidate source | Count | On-truth rate |
+|---|---|---|
+| filler | 25/216 | 11.6% |
+| l1 | 120/429 | 28.0% |
+| evidenced (l1/l2/both) | 120/429 | 28.0% |
+
+Per-detector signal volume and hit rate on TRAIL:
+
+| Detector | Signals | Hits | Rate |
+|---|---|---:|---:|
+| instruction_noncompliance | 228 | 84 | 36.8% |
+| all other detectors combined | 493 | 66 | 13.4% |
+
+Leave-one-out on TRAIL confirms the gain is carried by
+`instruction_noncompliance`:
+
+| Unregistered | Evidenced rate | Filler rate |
+|---|---:|---:|
+| (all registered) | 28.0% | 11.6% |
+| instruction_noncompliance | 15.7% | 23.6% |
+
+Who&When: 184 traces, 184 cases.
+
+| Candidate source | Count | On-truth rate |
+|---|---|---|
+| filler | 80/702 | 11.4% |
+| l1 | 1/113 | 0.9% |
+| evidenced (l1/l2/both) | 1/113 | 0.9% |
+
+`instruction_noncompliance` fires zero signals on Who&When. Leave-one-out on
+Who&When is essentially flat; unregistering any detector does not move the
+evidence rate because the pool is already almost empty.
+
+**Outcome:** Task B PASSED gate 2 on TRAIL: evidenced candidates (28.0%)
+now beat filler candidates (11.6%). Monotone calibration (Task D) is
+unlocked. Who&When evidenced remains 0.9%, and nothing in the current
+catalogue aims at agent-reasoning mistakes there; that is the next open
+question.
 
 ## What was verified vs what remains unverified
 
