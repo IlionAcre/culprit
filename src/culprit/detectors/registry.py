@@ -6,6 +6,7 @@ Owned solely by WS-C per CLAUDE.md's "one owner per plugin registry" rule.
 """
 
 from culprit.detectors.base import Detector
+from culprit.detectors.compliance import instruction_noncompliance
 from culprit.detectors.context import context_overflow, silent_history_truncation, step_budget_exhausted
 from culprit.detectors.flow import duplicate_delegation, missing_verification, premature_termination
 from culprit.detectors.loops import oscillation, repeated_identical_action, retry_storm
@@ -19,6 +20,7 @@ DETECTORS: dict[str, Detector] = {
     "tool_error": tool_error,
     "empty_tool_result": empty_tool_result,
     "error_swallowed": error_swallowed,
+    "instruction_noncompliance": instruction_noncompliance,
     "oscillation": oscillation,
     "repeated_identical_action": repeated_identical_action,
     "retry_storm": retry_storm,
