@@ -483,15 +483,17 @@ problem as detecting an anomalous step sequence in an agent trace.
   WSL `podman-machine-default` distro (`podman machine ssh -- sudo podman ps
   -a` sees them; rootless `wsl -d podman-machine-default -- podman ps -a` does
   not). The `culprit` database held only 467 adjudications / 316 diagnoses /
-  947 benchmark_cases at `0002`; `culprit_test` held 0/0/0. The Phase 3
-  pre-refit population of ~3,021 adjudication rows is not recoverable, so Task
-  D (monotone calibration refit) stays blocked. Migration `0003` was applied
-  to both databases to close the divergence, and the full DSN-gated suite
-  passes (581 passed with `CULPRIT_TEST_DSN` set, 562 passed / 19 skipped
-  offline). What survives is the candidate-recall series, because the new
-  offline L1 harness regenerates it from raw annotations with no database and
-  no LLM. Any future run that needs persisted benchmark data must re-generate
-  or import the ~3,021-row population and apply `0003` first.
+  947 benchmark_cases at `0002`; `culprit_test` held 0/0/0. Task
+  D (monotone calibration refit) has cleared its evidence gate, since L1
+  evidence now carries signal, and stays blocked on data: the ~3,021-row
+  population it would fit is unrecoverable, so a fresh paid benchmark run has
+  to come first. Migration `0003` was applied to both databases to close the
+  divergence, and the full DSN-gated suite passes (581 passed with
+  `CULPRIT_TEST_DSN` set, 562 passed / 19 skipped offline). What survives is
+  the candidate-recall series, because the new offline L1 harness regenerates
+  it from raw annotations with no database and no LLM. Any future run that
+  needs persisted benchmark data must re-generate or import the ~3,021-row
+  population and apply `0003` first.
 
 ### L5 clustering
 
@@ -1045,11 +1047,29 @@ Who&When: 184 traces, 184 cases.
 Who&When is essentially flat; unregistering any detector does not move the
 evidence rate because the pool is already almost empty.
 
-**Outcome:** Task B PASSED gate 2 on TRAIL: evidenced candidates (28.0%)
-now beat filler candidates (11.6%). Monotone calibration (Task D) is
-unlocked. Who&When evidenced remains 0.9%, and nothing in the current
-catalogue aims at agent-reasoning mistakes there; that is the next open
-question.
+**Outcome.** Evidenced candidates now beat the padding they displaced. The
+honest comparison is against the filler rate measured with the detector
+unregistered, 23.6%, rather than the 11.6% filler rate in the same run,
+which fell because the detector claimed the well-placed LLM steps filler
+used to occupy.
+
+| TRAIL, per candidate | Evidenced | Filler | Whole shortlist |
+|---|---:|---:|---:|
+| Before Phase 4 | 15.7% | 23.6% | 20.2% |
+| Phase 4 as first shipped | 28.0% | 11.6% | 22.5% |
+| After Phase 5 Task 1 | 36.9% | 2.7% | 33.0% |
+
+Who&When evidenced remains 0.9%. `instruction_noncompliance` fires zero
+signals there, and nothing in the catalogue aims at agent-reasoning
+mistakes, which is the next open question.
+
+**What the detector actually recognizes.** Its instruction regex extracted
+exactly two distinct literals across all 129 TRAIL traces, `<end_code>` (637
+occurrences) and `<end_plan>` (147). Phase 5 removed the buckets that
+hardcoded those two, so the rule now generalizes to any literal the
+instruction names, and the measured gain still rests on a benchmark whose
+required-output constraints are these two tags. A second benchmark with
+different constraints is what would test the generalization.
 
 ## What was verified vs what remains unverified
 
