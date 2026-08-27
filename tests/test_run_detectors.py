@@ -28,12 +28,19 @@ def _spans_by_id(run: SynthRun) -> dict[str, Span]:
     return {s.span_id: s for s in run.spans}
 
 
-def test_registry_names_match_every_injection_kind_exactly():
-    """Every synthetic injection kind must have a matching detector, but the
-    registry may also contain detectors that have no synthetic injection
-    (e.g. `instruction_noncompliance`, which is validated against real TRAIL
-    shapes in its own test module)."""
+def test_every_injection_kind_has_a_detector():
+    """The correspondence the rest of this file leans on: a detector name and
+    its `synth_inject` kind are the same string, so the loop below can check
+    "did the matching detector fire"."""
     assert INJECTION_KINDS <= set(DETECTORS)
+
+
+def test_detectors_without_a_synthetic_injection_are_declared():
+    """A detector with no synth injection gets no automatic false-positive
+    check here, so each one is listed deliberately and carries that check in
+    its own test module. `instruction_noncompliance` is validated against
+    real TRAIL shapes in `tests/test_detectors_compliance.py`."""
+    assert set(DETECTORS) - INJECTION_KINDS == {"instruction_noncompliance"}
 
 
 @pytest.mark.parametrize("kind", sorted(INJECTION_KINDS))
