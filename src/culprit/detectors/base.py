@@ -72,24 +72,6 @@ def _step_text(span: Span) -> str:
     return ""
 
 
-def _step_request_text(span: Span) -> str:
-    """The request-side text of an LLM step, separated from the response so
-    instruction-noncompliance checks can compare what was asked against what
-    was produced. Empty for non-LLM steps."""
-    p = span.payload if span is not None else None
-    if isinstance(p, LlmPayload):
-        return " ".join(m.content or "" for m in p.request_messages)
-    return ""
-
-
-def _step_response_text(span: Span) -> str:
-    """The response-side text of an LLM step. Empty for non-LLM steps."""
-    p = span.payload if span is not None else None
-    if isinstance(p, LlmPayload):
-        return " ".join(m.content or "" for m in p.response_messages)
-    return ""
-
-
 @dataclass(frozen=True)
 class DetectorContext:
     """Everything all twenty detectors read, computed once. Every field
@@ -106,8 +88,6 @@ class DetectorContext:
     tool_universe: frozenset[str]
     goal_terms: frozenset[str]
     step_text: list[str]  # step_text[i] is step i's own searchable text
-    step_request_text: list[str]  # request-side text, for instruction checks
-    step_response_text: list[str]  # response-side text, for instruction checks
     llm_steps_by_actor: dict[str, list[int]]
 
     def had_provenance_before(self, token: str, step_index: int) -> bool:
@@ -131,15 +111,11 @@ def build_context(trace: Trace, steps: list[Step], spans_by_id: dict[str, Span])
     token_series: dict[int, tuple[int | None, int | None, int | None]] = {}
     tool_names: set[str] = set()
     step_text: list[str] = []
-    step_request_text: list[str] = []
-    step_response_text: list[str] = []
     llm_steps_by_actor: dict[str, list[int]] = {}
 
     for step in steps:
         span = spans_by_id.get(step.span_id)
         step_text.append(_step_text(span) if span is not None else "")
-        step_request_text.append(_step_request_text(span) if span is not None else "")
-        step_response_text.append(_step_response_text(span) if span is not None else "")
         payload = span.payload if span is not None else None
 
         if step.kind == SpanKind.TOOL and isinstance(payload, ToolPayload):
@@ -173,7 +149,5 @@ def build_context(trace: Trace, steps: list[Step], spans_by_id: dict[str, Span])
         tool_universe=frozenset(tool_names),
         goal_terms=tokens(trace.task_goal),
         step_text=step_text,
-        step_request_text=step_request_text,
-        step_response_text=step_response_text,
         llm_steps_by_actor=llm_steps_by_actor,
     )
