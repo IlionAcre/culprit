@@ -483,17 +483,16 @@ problem as detecting an anomalous step sequence in an agent trace.
   WSL `podman-machine-default` distro (`podman machine ssh -- sudo podman ps
   -a` sees them; rootless `wsl -d podman-machine-default -- podman ps -a` does
   not). The `culprit` database held only 467 adjudications / 316 diagnoses /
-  947 benchmark_cases at `0002`; `culprit_test` held 0/0/0. Task
-  D (monotone calibration refit) has cleared its evidence gate, since L1
-  evidence now carries signal, and stays blocked on data: the ~3,021-row
-  population it would fit is unrecoverable, so a fresh paid benchmark run has
-  to come first. Migration `0003` was applied to both databases to close the
-  divergence, and the full DSN-gated suite passes (581 passed with
-  `CULPRIT_TEST_DSN` set, 562 passed / 19 skipped offline). What survives is
-  the candidate-recall series, because the new offline L1 harness regenerates
-  it from raw annotations with no database and no LLM. Any future run that
-  needs persisted benchmark data must re-generate or import the ~3,021-row
-  population and apply `0003` first.
+  947 benchmark_cases at `0002`; `culprit_test` held 0/0/0. Task D (monotone
+  calibration refit) has cleared its evidence gate, since L1 evidence now
+  carries signal, and stays blocked on data: the ~3,021-row population it would
+  fit is unrecoverable, so a fresh paid benchmark run has to come first.
+  Migration `0003` was applied to both databases to close the divergence, and
+  the full DSN-gated suite passes (581 passed with `CULPRIT_TEST_DSN` set, 562
+  passed / 19 skipped offline). What survives is the candidate-recall series,
+  because the new offline L1 harness regenerates it from raw annotations with no
+  database and no LLM. Any future run that needs persisted benchmark data must
+  re-generate or import the ~3,021-row population and apply `0003` first.
 
 ### L5 clustering
 
