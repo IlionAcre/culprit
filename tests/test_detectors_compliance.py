@@ -6,57 +6,64 @@ from culprit.schemas import LlmPayload, Message, Outcome, Span, SpanKind, SpanSt
 from culprit.synth import successful_run
 
 
-def _ctx_from_llm(request_text: str, response_text: str) -> build_context:
-    """Build a one-step trace with a single LLM span and run the detector."""
+def _ctx_from_llm_turns(turns: list[tuple[str, str]]) -> build_context:
+    """Build a trace of consecutive LLM steps, one per (request, response)."""
     trace_id = "test:compliance"
-    span_id = "span-0"
-    span = Span(
-        trace_id=trace_id,
-        span_id=span_id,
-        parent_span_id=None,
-        name="plan",
-        kind=SpanKind.LLM,
-        status=SpanStatus.OK,
-        status_message=None,
-        start_ns=0,
-        end_ns=1_000_000,
-        vocabulary="test",
-        attributes={},
-        payload=LlmPayload(
-            provider="test",
-            model="test-model",
-            request_messages=[Message(role="user", content=request_text)],
-            response_messages=[Message(role="assistant", content=response_text)],
-            tool_calls=[],
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-        ),
-    )
-    step = Step(
-        trace_id=trace_id,
-        step_index=0,
-        span_id=span_id,
-        kind=SpanKind.LLM,
-        actor="agent",
-        depth=0,
-        tree_path="0",
-        signature="llm:plan",
-        summary="plan",
-        start_ns=0,
-        end_ns=1_000_000,
-        duration_ms=1.0,
-    )
+    spans_by_id = {}
+    steps = []
+    for i, (request_text, response_text) in enumerate(turns):
+        span_id = f"span-{i}"
+        spans_by_id[span_id] = Span(
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=None,
+            name="plan",
+            kind=SpanKind.LLM,
+            status=SpanStatus.OK,
+            status_message=None,
+            start_ns=i * 1_000_000,
+            end_ns=(i + 1) * 1_000_000,
+            vocabulary="test",
+            attributes={},
+            payload=LlmPayload(
+                provider="test",
+                model="test-model",
+                request_messages=[Message(role="user", content=request_text)],
+                response_messages=[Message(role="assistant", content=response_text)],
+                tool_calls=[],
+                prompt_tokens=100,
+                completion_tokens=50,
+                total_tokens=150,
+            ),
+        )
+        steps.append(Step(
+            trace_id=trace_id,
+            step_index=i,
+            span_id=span_id,
+            kind=SpanKind.LLM,
+            actor="agent",
+            depth=0,
+            tree_path=str(i),
+            signature="llm:plan",
+            summary="plan",
+            start_ns=i * 1_000_000,
+            end_ns=(i + 1) * 1_000_000,
+            duration_ms=1.0,
+        ))
     trace = Trace(
         trace_id=trace_id,
         source="test",
         outcome=Outcome.FAILURE,
-        root_span_id=span_id,
-        span_count=1,
-        step_count=1,
+        root_span_id="span-0",
+        span_count=len(turns),
+        step_count=len(turns),
     )
-    spans_by_id = {span_id: span}
-    return build_context(trace, [step], spans_by_id)
+    return build_context(trace, steps, spans_by_id)
+
+
+def _ctx_from_llm(request_text: str, response_text: str) -> build_context:
+    """Build a one-step trace with a single LLM span and run the detector."""
+    return _ctx_from_llm_turns([(request_text, response_text)])
 
 
 def test_instruction_noncompliance_fires_on_missing_end_plan():
@@ -170,3 +177,23 @@ def test_instruction_noncompliance_no_signal_for_html_noise():
     request = "End with <b>bold</b> and <i>italic</i>."
     ctx = _ctx_from_llm(request, "no bold here")
     assert instruction_noncompliance(ctx) == []
+
+
+def test_instruction_noncompliance_fires_outside_the_trail_vocabulary():
+    """A required literal earns a signal on its own shape, not because its
+    text happens to contain "plan" or "code"."""
+    ctx = _ctx_from_llm(
+        "When you are finished, end with <end_answer> and stop there.",
+        "Here is my answer. Done.",
+    )
+    signals = instruction_noncompliance(ctx)
+    assert len(signals) == 1
+    assert "<end_answer>" in signals[0].message
+
+
+def test_instruction_noncompliance_fires_on_every_noncompliant_step():
+    """Each step is judged against its own instruction, so a trace that
+    violates the same constraint three times yields three signals."""
+    turns = [("End with <end_plan> please.", "a plan with no delimiter")] * 3
+    signals = instruction_noncompliance(_ctx_from_llm_turns(turns))
+    assert [s.step_index for s in signals] == [0, 1, 2]

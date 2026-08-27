@@ -192,7 +192,7 @@ def test_evidenced_sources_set_excludes_fallback_and_filler():
 def test_trail_evidenced_per_candidate_rate_regression_guard():
     """The TRAIL evidenced per-candidate rate must stay near today's 15.7%."""
     result = evaluate_benchmark("trail")
-    assert result.evidenced_rate >= 0.13, (
-        f"TRAIL evidenced per-candidate rate {result.evidenced_rate:.3%} "
-        f"dropped below 0.13 regression floor"
+    assert result.evidenced_rate >= 0.30, (
+        f"TRAIL evidenced per-candidate rate {result.evidenced_rate:.3f} "
+        f"dropped below 0.30 regression floor"
     )

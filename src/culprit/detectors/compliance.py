@@ -4,9 +4,9 @@ literal token the current-turn instruction explicitly required.
 TRAIL's formatting and instruction-violation annotations (42% of the
 benchmark) are the motivating case: the plan-generation prompt tells the
 model to end with `<end_plan>`, and the generated plan frequently omits it.
-The check is deliberately literal: extract required tokens from the
-instruction, then test for their presence in the response. This keeps L1
-deterministic and cheap.
+The check is deliberately general: extract required tokens from the
+instruction, then test for their presence in the response. `_HTML_NOISE` is
+the only literal filter. This keeps L1 deterministic and cheap.
 """
 
 import re
@@ -54,27 +54,16 @@ def _current_instruction_text(payload: LlmPayload) -> str:
     return f"{system_text}\n{first_user_text}"
 
 
-def _literal_category(literal: str) -> str | None:
-    """Bucket a required literal into 'plan', 'code', or None. Only these two
-    delimiter categories appear in TRAIL with enough volume and precision to
-    move the evidenced rate; other literal shapes are left for future work."""
-    lower = literal.lower()
-    if "plan" in lower:
-        return "plan"
-    if "code" in lower:
-        return "code"
-    return None
-
-
 def instruction_noncompliance(ctx: DetectorContext) -> list[Signal]:
     """Fire when a required output literal is missing from an LLM response.
 
-    Per trace, only the first plan step and the first code step are flagged.
-    TRAIL replans and multi-step code blocks repeat the same constraint, and
-    firing on every repetition floods the shortlist without adding precision.
+    Each LLM step is judged against its own current-turn instruction, so a
+    trace that repeats a constraint and violates it repeatedly earns one
+    signal per violating step. Volume is bounded naturally: only steps whose
+    instruction names a literal can fire at all, and `merge_candidates`
+    truncates the shortlist to `max_candidates`.
     """
     signals: list[Signal] = []
-    fired_categories: set[str] = set()
 
     for step in ctx.steps:
         if step.kind != SpanKind.LLM:
@@ -85,52 +74,34 @@ def instruction_noncompliance(ctx: DetectorContext) -> list[Signal]:
 
         payload = span.payload
         instruction_text = _current_instruction_text(payload)
-        required_by_category: dict[str, list[str]] = {}
+        required: list[str] = []
         for match in _INSTRUCTION_RE.finditer(instruction_text):
             literal = match.group(1)
             if literal.lower() in _HTML_NOISE:
                 continue
-            category = _literal_category(literal)
-            if category is None:
-                continue
-            required_by_category.setdefault(category, []).append(literal)
-
-        if not required_by_category:
+            if literal not in required:
+                required.append(literal)
+        if not required:
             continue
 
-        # Only fire once per category per trace to control volume.
-        categories_to_fire = [
-            cat for cat in required_by_category if cat not in fired_categories
-        ]
-        if not categories_to_fire:
+        response_lower = " ".join(m.content or "" for m in payload.response_messages).lower()
+        missing = [lit for lit in required if lit.lower() not in response_lower]
+        if not missing:
             continue
 
-        response_text = " ".join(m.content or "" for m in payload.response_messages)
-        response_lower = response_text.lower()
-        missing: list[str] = []
-        for category in categories_to_fire:
-            category_literals = required_by_category[category]
-            category_missing = [
-                lit for lit in category_literals if lit.lower() not in response_lower
-            ]
-            if category_missing:
-                missing.append(category_missing[0])
-                fired_categories.add(category)
-
-        if missing:
-            signals.append(Signal(
-                detector="instruction_noncompliance",
-                step_index=step.step_index,
+        signals.append(Signal(
+            detector="instruction_noncompliance",
+            step_index=step.step_index,
+            span_id=step.span_id,
+            severity=_SEVERITY,
+            category=FailureClass.CONSTRAINT_VIOLATION.value,
+            message=f"Required literal(s) missing from response: {', '.join(missing)}",
+            evidence=[Evidence(
                 span_id=step.span_id,
-                severity=_SEVERITY,
-                category=FailureClass.CONSTRAINT_VIOLATION.value,
-                message=f"Required literal(s) missing from response: {', '.join(missing)}",
-                evidence=[Evidence(
-                    span_id=step.span_id,
-                    step_index=step.step_index,
-                    field="payload.request_messages",
-                    excerpt=instruction_text[:200],
-                )],
-            ))
+                step_index=step.step_index,
+                field="payload.request_messages",
+                excerpt=instruction_text[:200],
+            )],
+        ))
 
     return signals
