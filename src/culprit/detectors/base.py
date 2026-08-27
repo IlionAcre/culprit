@@ -3,7 +3,7 @@ from, the `Detector` protocol every detector implements, and small text
 helpers used across the family modules.
 
 `DetectorContext` is built exactly once per `run_detectors()` call (see
-`run_detectors.py`) so twenty detectors never each recompute the same
+`run_detectors.py`) so every registered detector never each recomputes the same
 signature run-length-encoding, argument/result hashes, and token series.
 CLAUDE.md's "L1 detectors" section is why that matters: 5ms vs 200ms per
 trace.
@@ -74,7 +74,7 @@ def _step_text(span: Span) -> str:
 
 @dataclass(frozen=True)
 class DetectorContext:
-    """Everything all twenty detectors read, computed once. Every field
+    """Everything every detector reads, computed once. Every field
     exists because at least one detector family needs it; see the
     per-detector docstrings in the family modules for which."""
 

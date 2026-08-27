@@ -1,7 +1,8 @@
-"""Detector name -> callable registry. Names match
-`culprit.synth_inject.INJECTION_KINDS` exactly, one entry per L1 detector in
-the plan's catalogue, so the definition of done ("every detector fires on
-its matching injection") has exactly one registry entry per injection kind.
+"""Detector name -> callable registry. Every `culprit.synth_inject`
+injection kind has a detector of the same name, so the definition of done
+("every detector fires on its matching injection") stays checkable.
+`instruction_noncompliance` is the one entry with no injection: it carries
+its false-positive check in `tests/test_detectors_compliance.py` instead.
 Owned solely by WS-C per CLAUDE.md's "one owner per plugin registry" rule.
 """
 

@@ -4,9 +4,14 @@ literal token the current-turn instruction explicitly required.
 TRAIL's formatting and instruction-violation annotations (42% of the
 benchmark) are the motivating case: the plan-generation prompt tells the
 model to end with `<end_plan>`, and the generated plan frequently omits it.
-The check is deliberately general: extract required tokens from the
-instruction, then test for their presence in the response. `_HTML_NOISE` is
-the only literal filter. This keeps L1 deterministic and cheap.
+The check extracts required tokens from the instruction, then tests for
+their presence in the response, which keeps L1 deterministic and cheap.
+Reach is bounded by shape, not by tag name: `_INSTRUCTION_RE` captures
+angle-bracket tags only, so `<end_plan>` and `<end_answer>` both fire while
+a quoted literal, a fenced block, or a bare `DONE` marker do not.
+`_HTML_NOISE` then drops the tags that are markup rather than constraints.
+Widening the shape is the obvious next move, and it needs its own
+false-positive measurement before it ships.
 """
 
 import re
