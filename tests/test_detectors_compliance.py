@@ -164,7 +164,9 @@ def test_instruction_noncompliance_ignores_history_instructions():
 
 
 def test_instruction_noncompliance_never_fires_on_twenty_clean_synth_runs():
-    """Clean synth runs have no plan/code delimiter instructions."""
+    """Clean synth runs issue no required-literal instructions, so the
+    detector has nothing to check. This is the project's per-detector
+    false-positive bar: zero signals across 20 clean successes."""
     for seed in range(20):
         run = successful_run(seed)
         spans_by_id = {s.span_id: s for s in run.spans}
