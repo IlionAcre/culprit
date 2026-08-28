@@ -489,10 +489,11 @@ problem as detecting an anomalous step sequence in an agent trace.
   fit is unrecoverable, so a fresh paid benchmark run has to come first.
   Migration `0003` was applied to both databases to close the divergence, and
   the full DSN-gated suite passes (584 passed with `CULPRIT_TEST_DSN` set, 565
-  passed / 19 skipped offline, measured on 2026-08-27). What survives is the candidate-recall series,
-  because the new offline L1 harness regenerates it from raw annotations with no
-  database and no LLM. Any future run that needs persisted benchmark data must
-  re-generate or import the ~3,021-row population and apply `0003` first.
+  passed / 19 skipped offline, measured on 2026-08-27). What survives is the
+  candidate-recall series, because the new offline L1 harness regenerates it
+  from raw annotations with no database and no LLM. Any future run that needs
+  persisted benchmark data must re-generate or import the ~3,021-row
+  population and apply `0003` first.
 
 ### L5 clustering
 
@@ -1069,11 +1070,11 @@ section above.
 **What the detector actually recognizes.** Its instruction regex extracted
 exactly two distinct literals across all 129 TRAIL traces, `<end_code>` (637
 occurrences) and `<end_plan>` (147). Phase 5 removed the buckets that
-hardcoded those two, so the rule generalizes across tag names rather than across constraint
-shapes: `_INSTRUCTION_RE` captures angle-bracket tags only, and 5 of 7
-realistic constraint shapes tested (a quoted literal, a bracketed marker, a
-bare token, a fenced block, a hash-delimited marker) produce no signal at
-all. The measured gain therefore still rests on a benchmark whose
+hardcoded those two, so the rule generalizes across tag names rather than
+across constraint shapes: `_INSTRUCTION_RE` captures angle-bracket tags only,
+and 5 of 7 realistic constraint shapes tested (a quoted literal, a bracketed
+marker, a bare token, a fenced block, a hash-delimited marker) produce no
+signal at all. The measured gain therefore still rests on a benchmark whose
 required-output constraints are these two tags. A second benchmark with
 different constraints is what would test the generalization.
 
