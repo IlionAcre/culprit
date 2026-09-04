@@ -41,21 +41,57 @@ About 40k input + 2.5k output tokens per diagnosis. On a Flash-Lite tier that is
 
 ## Quickstart
 
-Offline:
+Walk from clone to a reproduced number:
+
+1. Install dependencies:
 ```bash
 uv sync --all-groups
-uv run pytest -q
 ```
 
-With services, create a gitignored `.env` with `GEMINI_API_KEY`, `CULPRIT_DATABASE_URL`, `CULPRIT_REDIS_URL`, and optionally `CULPRIT_TEST_DSN`. Load it before each command:
-
+2. Run the offline test suite:
+Blank `CULPRIT_TEST_DSN` so the suite skips database-gated tests instead of hanging when containers are stopped:
 ```bash
+CULPRIT_TEST_DSN= uv run pytest -q
+```
+
+3. Start services:
+```bash
+docker compose up -d
+# or: podman-compose up -d
+```
+
+4. Configure environment:
+```bash
+cp .env.example .env
 set -a && . ./.env && set +a
+```
+
+5. Apply database migrations:
+```bash
 uv run alembic upgrade head
+```
+
+6. Ingest and diagnose a fixture:
+```bash
 uv run culprit ingest tests/fixtures/otlp/otel_genai_sample.json
 uv run culprit diagnose a1b2c3d4e5f60718293a4b5c6d7e8f90
 uv run culprit show a1b2c3d4e5f60718293a4b5c6d7e8f90
 uv run culprit recluster
+```
+
+7. Prepare benchmark data and run the harness:
+```bash
+uv run python scripts/prepare_trail.py
+uv run python -m culprit.l1_eval
+```
+
+## Reproducing the benchmark numbers
+
+The offline evaluation harness requires no services, no API key, and no external spend. It evaluates the deterministic detector catalogue against the benchmark dataset in seconds:
+
+```bash
+uv run python scripts/prepare_trail.py
+uv run python -m culprit.l1_eval
 ```
 
 ## Where the thinking lives
