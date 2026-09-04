@@ -488,8 +488,8 @@ problem as detecting an anomalous step sequence in an agent trace.
   carries signal, and stays blocked on data: the ~3,021-row population it would
   fit is unrecoverable, so a fresh paid benchmark run has to come first.
   Migration `0003` was applied to both databases to close the divergence, and
-  the full DSN-gated suite passes (584 passed with `CULPRIT_TEST_DSN` set, 565
-  passed / 19 skipped offline, measured on 2026-08-27). What survives is the
+  the full DSN-gated suite passes (593 passed with `CULPRIT_TEST_DSN` set, 574
+  passed / 19 skipped offline, measured on 2026-09-04). What survives is the
   candidate-recall series, because the new offline L1 harness regenerates it
   from raw annotations with no database and no LLM. Any future run that needs
   persisted benchmark data must re-generate or import the ~3,021-row
@@ -672,7 +672,7 @@ pin.
 
 ## Known gotcha: `.env` silently turns on Postgres-gated tests
 
-`src/culprit/cli.py` calls `load_dotenv()` at import, so any variable in a `.env` file is present before pytest collects tests. If `.env` sets `CULPRIT_TEST_DSN`, a plain `uv run pytest -q` runs the 19 database-gated tests instead of skipping them. With services up this is why the suite reports 584 passes. If the Postgres container is stopped, the command hangs with no output (killed after 15 minutes on 2026-09-04), compared to 35 seconds for the same suite with the DSN blanked. Either keep `.env` unset when you want the offline-only run, or blank `CULPRIT_TEST_DSN` before pytest.
+`src/culprit/cli.py` calls `load_dotenv()` at import, so any variable in a `.env` file is present before pytest collects tests. If `.env` sets `CULPRIT_TEST_DSN`, a plain `uv run pytest -q` runs the 19 database-gated tests instead of skipping them. With services up this is why the suite reports 593 passes. If the Postgres container is stopped, the command hangs with no output (killed after 15 minutes on 2026-09-04), compared to 35 seconds for the same suite with the DSN blanked. Either keep `.env` unset when you want the offline-only run, or blank `CULPRIT_TEST_DSN` before pytest.
 
 ## Known gotcha: OTLP JSON encodes int64 fields and timestamps as strings
 
@@ -1032,51 +1032,47 @@ Leave-one-out on TRAIL confirms the gain is carried by
 
 | Unregistered | Evidenced rate | Filler rate |
 |---|---:|---:|
-| (all registered) | 28.0% | 11.6% |
+| (all registered) | 36.9% | 2.7% |
 | instruction_noncompliance | 15.7% | 23.6% |
 
-Who&When: 184 traces, 184 cases.
+Phase 6 widened `instruction_noncompliance` (`_INSTRUCTION_RE`) to recognize
+bracketed markers (`[[DONE]]`), quoted literals (`"FINISHED"`), fenced code
+blocks (```` ```json ````), and hash-delimited markers (`###END###`) alongside
+angle-bracket tags, with zero false positives on 20 clean synth runs.
+
+Who&When (184 traces, 184 cases):
 
 | Candidate source | Count | On-truth rate |
 |---|---|---|
-| filler | 80/702 | 11.4% |
-| l1 | 1/113 | 0.9% |
-| evidenced (l1/l2/both) | 1/113 | 0.9% |
+| filler | 65/661 | 9.8% |
+| l1 | 16/176 | 9.1% |
+| evidenced (l1/l2/both) | 16/176 | 9.1% |
 
-`instruction_noncompliance` fires zero signals on Who&When. Leave-one-out on
-Who&When is essentially flat; unregistering any detector does not move the
-evidence rate because the pool is already almost empty.
+Phase 6 added `reasoning_turn_defect` to target agent reasoning turns
+(`SpanKind.AGENT`), detecting unverified assumptions, simulated data shortcuts,
+and malformed code blocks. On Who&When, it fires 63 signals with 15 hits (23.8%
+hit rate), clearing the 9.8% filler rate. Coverage on Who&When improved from
+0.5% (1/184) to 8.7% (16/184), and evidenced candidates rose from 0.9% (1/113)
+to 9.1% (16/176).
 
-**Outcome.** Evidenced candidates now beat the padding they displaced. The
-honest comparison is against the filler rate measured with the detector
-unregistered, 23.6%, rather than the 11.6% filler rate in the same run,
-which fell because the detector claimed the well-placed LLM steps filler
-used to occupy.
+Leave-one-out confirms `reasoning_turn_defect` carries the Who&When result:
+unregistering it drops evidenced back to 0.9% and raises filler to 11.4%.
 
-| TRAIL, per candidate | Evidenced | Filler | Whole shortlist |
-|---|---:|---:|---:|
-| Before Phase 4 | 15.7% | 23.6% | 20.2% |
-| Phase 4 as first shipped | 28.0% | 11.6% | 22.5% |
-| After Phase 5 Task 1 | 36.9% | 2.7% | 33.0% |
+**Recorded negative result on Who&When candidate merge.** Although
+`reasoning_turn_defect` achieved a 23.8% per-signal hit rate, the aggregate
+candidate-level evidenced rate (9.1%) remains below the filler baseline (9.8%).
+The culprit is `tool_error`, which fires 90 signals with only 1 hit (1.1% hit
+rate) on Who&When execution turns, diluting the candidate pool. In
+leave-one-out analysis, removing `tool_error` raises Who&When evidenced to 17.4%
+against 10.3% filler.
 
-Who&When evidenced remains 0.9%. `instruction_noncompliance` fires zero
-signals there, and nothing in the catalogue aims at agent-reasoning
-mistakes, which is the next open question.
+**Outcome across benchmarks.**
 
-Task D (monotone calibration) has cleared its evidence gate and stays
-blocked on data; the reason is recorded once in the "L3 adjudication"
-section above.
-
-**What the detector actually recognizes.** Its instruction regex extracted
-exactly two distinct literals across all 129 TRAIL traces, `<end_code>` (637
-occurrences) and `<end_plan>` (147). Phase 5 removed the buckets that
-hardcoded those two, so the rule generalizes across tag names rather than
-across constraint shapes: `_INSTRUCTION_RE` captures angle-bracket tags only,
-and 5 of 7 realistic constraint shapes tested (a quoted literal, a bracketed
-marker, a bare token, a fenced block, a hash-delimited marker) produce no
-signal at all. The measured gain therefore still rests on a benchmark whose
-required-output constraints are these two tags. A second benchmark with
-different constraints is what would test the generalization.
+| Benchmark, per candidate | Evidenced | Filler |
+|---|---:|---:|
+| TRAIL (all 129 traces) | 36.9% | 2.7% |
+| Who&When (all 184 traces) | 9.1% | 9.8% |
+| Who&When without tool_error | 17.4% | 10.3% |
 
 ## What was verified vs what remains unverified
 
