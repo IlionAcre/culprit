@@ -12,6 +12,7 @@ from culprit.detectors.context import context_overflow, silent_history_truncatio
 from culprit.detectors.flow import duplicate_delegation, missing_verification, premature_termination
 from culprit.detectors.loops import oscillation, repeated_identical_action, retry_storm
 from culprit.detectors.provenance import parameter_drift
+from culprit.detectors.reasoning import reasoning_turn_defect
 from culprit.detectors.retrieval import goal_token_drift, low_score_retrieval, unused_retrieval
 from culprit.detectors.schema import hallucinated_tool, output_schema_violation, tool_arg_malformed
 from culprit.detectors.timing import stall_timeout
@@ -22,6 +23,7 @@ DETECTORS: dict[str, Detector] = {
     "empty_tool_result": empty_tool_result,
     "error_swallowed": error_swallowed,
     "instruction_noncompliance": instruction_noncompliance,
+    "reasoning_turn_defect": reasoning_turn_defect,
     "oscillation": oscillation,
     "repeated_identical_action": repeated_identical_action,
     "retry_storm": retry_storm,

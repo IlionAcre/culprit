@@ -40,7 +40,7 @@ def test_detectors_without_a_synthetic_injection_are_declared():
     check here, so each one is listed deliberately and carries that check in
     its own test module. `instruction_noncompliance` is validated against
     real TRAIL shapes in `tests/test_detectors_compliance.py`."""
-    assert set(DETECTORS) - INJECTION_KINDS == {"instruction_noncompliance"}
+    assert set(DETECTORS) - INJECTION_KINDS == {"instruction_noncompliance", "reasoning_turn_defect"}
 
 
 @pytest.mark.parametrize("kind", sorted(INJECTION_KINDS))
