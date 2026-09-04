@@ -52,7 +52,7 @@ logger = logging.getLogger(LOGGER_NAME)
 # later reader can tell which code version produced it (Apple's "Overton"
 # citation in CLAUDE.md: re-running analysis makes a new Diagnosis, and this
 # is what makes two diagnoses for the same trace comparable).
-LAYER_VERSIONS = {"l0": "1.0.0", "l1": "1.1.0", "l2": "1.0.0", "l3": "1.0.0"}
+LAYER_VERSIONS = {"l0": "1.0.0", "l1": "1.2.0", "l2": "1.0.0", "l3": "1.0.0"}
 
 
 def _load_steps(trace: Trace, conn_fn: ConnFn) -> tuple[list, dict]:

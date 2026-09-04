@@ -199,3 +199,51 @@ def test_instruction_noncompliance_fires_on_every_noncompliant_step():
     turns = [("End with <end_plan> please.", "a plan with no delimiter")] * 3
     signals = instruction_noncompliance(_ctx_from_llm_turns(turns))
     assert [s.step_index for s in signals] == [0, 1, 2]
+
+
+def test_instruction_noncompliance_fires_on_missing_bracketed_marker():
+    """Bracketed marker [[DONE]] fires when missing and passes when present."""
+    request = "When complete, respond with [[DONE]] and nothing else."
+    ctx_missing = _ctx_from_llm(request, "Task is complete.")
+    signals = instruction_noncompliance(ctx_missing)
+    assert len(signals) == 1
+    assert "[[DONE]]" in signals[0].message
+
+    ctx_present = _ctx_from_llm(request, "Task is complete. [[DONE]]")
+    assert instruction_noncompliance(ctx_present) == []
+
+
+def test_instruction_noncompliance_fires_on_missing_quoted_literal():
+    """Quoted literal \"FINISHED\" fires when missing and passes when present."""
+    request = 'When you have completed all tasks, end with "FINISHED".'
+    ctx_missing = _ctx_from_llm(request, "All tasks are done.")
+    signals = instruction_noncompliance(ctx_missing)
+    assert len(signals) == 1
+    assert "FINISHED" in signals[0].message
+
+    ctx_present = _ctx_from_llm(request, "All tasks are done. FINISHED")
+    assert instruction_noncompliance(ctx_present) == []
+
+
+def test_instruction_noncompliance_fires_on_missing_fenced_block():
+    """Fenced block ```json fires when missing and passes when present."""
+    request = "Please provide the summary. Use the format ```json for output."
+    ctx_missing = _ctx_from_llm(request, "{ 'result': 'ok' }")
+    signals = instruction_noncompliance(ctx_missing)
+    assert len(signals) == 1
+    assert "```json" in signals[0].message
+
+    ctx_present = _ctx_from_llm(request, "```json\n{ 'result': 'ok' }\n```")
+    assert instruction_noncompliance(ctx_present) == []
+
+
+def test_instruction_noncompliance_fires_on_missing_hash_marker():
+    """Hash-delimited marker ###END### fires when missing and passes when present."""
+    request = "After your reasoning, end with ###END###."
+    ctx_missing = _ctx_from_llm(request, "Reasoning complete.")
+    signals = instruction_noncompliance(ctx_missing)
+    assert len(signals) == 1
+    assert "###END###" in signals[0].message
+
+    ctx_present = _ctx_from_llm(request, "Reasoning complete. ###END###")
+    assert instruction_noncompliance(ctx_present) == []

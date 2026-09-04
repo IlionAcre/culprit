@@ -7,11 +7,10 @@ model to end with `<end_plan>`, and the generated plan frequently omits it.
 The check extracts required tokens from the instruction, then tests for
 their presence in the response, which keeps L1 deterministic and cheap.
 Reach is bounded by shape, not by tag name: `_INSTRUCTION_RE` captures
-angle-bracket tags only, so `<end_plan>` and `<end_answer>` both fire while
-a quoted literal, a fenced block, or a bare `DONE` marker do not.
-`_HTML_NOISE` then drops the tags that are markup rather than constraints.
-Widening the shape is the obvious next move, and it needs its own
-false-positive measurement before it ships.
+angle-bracket tags (`<end_plan>`), bracketed markers (`[[DONE]]`),
+hash-delimited markers (`###END###`), fenced blocks (```` ```json ````), and
+quoted literals (`"FINISHED"`). `_HTML_NOISE` drops tags that are markup
+rather than constraints.
 """
 
 import re
@@ -28,8 +27,13 @@ from culprit.taxonomy import FailureClass
 # constraint.
 _INSTRUCTION_RE = re.compile(
     r"(?:end with|must contain|respond with|use the format|wrap in|write the|append the)\s+"
-    r"['\"`]?\\?n?\s*"
-    r"(<[^>\s]+[^>]*>)",
+    r"(?:"
+    r"['\"`]?\\?n?\s*(<[^>\s]+[^>]*>)|"
+    r"['\"`]?\s*(\[\[[^\]\s]+\]\])|"
+    r"['\"`]?\s*(###[^#\s]+###)|"
+    r"['\"`]?\s*(```[a-zA-Z0-9_-]*)|"
+    r"['\"`]([A-Za-z0-9_-]{3,})['\"`]"
+    r")",
     re.IGNORECASE,
 )
 
@@ -81,8 +85,8 @@ def instruction_noncompliance(ctx: DetectorContext) -> list[Signal]:
         instruction_text = _current_instruction_text(payload)
         required: list[str] = []
         for match in _INSTRUCTION_RE.finditer(instruction_text):
-            literal = match.group(1)
-            if literal.lower() in _HTML_NOISE:
+            literal = next((g for g in match.groups() if g is not None), None)
+            if not literal or literal.lower() in _HTML_NOISE:
                 continue
             if literal not in required:
                 required.append(literal)
