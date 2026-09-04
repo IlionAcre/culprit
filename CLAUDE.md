@@ -672,7 +672,7 @@ pin.
 
 ## Known gotcha: `.env` silently turns on Postgres-gated tests
 
-`src/culprit/cli.py` calls `load_dotenv()` at import, so any variable in a `.env` file is present before pytest collects tests. If `.env` sets `CULPRIT_TEST_DSN`, a plain `uv run pytest -q` runs the 18 database-gated tests instead of skipping them. With services up this is why the suite reports 524 passes; if the Postgres container is stopped, the same command fails instead of skipping. Either keep `.env` unset when you want the offline-only run, or run `unset CULPRIT_TEST_DSN` before pytest.
+`src/culprit/cli.py` calls `load_dotenv()` at import, so any variable in a `.env` file is present before pytest collects tests. If `.env` sets `CULPRIT_TEST_DSN`, a plain `uv run pytest -q` runs the 19 database-gated tests instead of skipping them. With services up this is why the suite reports 584 passes. If the Postgres container is stopped, the command hangs with no output (killed after 15 minutes on 2026-09-04), compared to 35 seconds for the same suite with the DSN blanked. Either keep `.env` unset when you want the offline-only run, or blank `CULPRIT_TEST_DSN` before pytest.
 
 ## Known gotcha: OTLP JSON encodes int64 fields and timestamps as strings
 

@@ -25,3 +25,6 @@ data/
 
 # Coverage artifacts
 .coverage
+
+# Tool artifacts
+graphify-out/
