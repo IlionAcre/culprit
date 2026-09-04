@@ -28,6 +28,14 @@ def main() -> None:
     repo_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("data/benchmarks/who_and_when/repo/Who&When")
     out_file = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("data/benchmarks/who_and_when/who_and_when_all.json")
 
+    if not repo_dir.exists():
+        print(
+            f"{repo_dir} does not exist. The Who&When dataset is not there; "
+            'see "Getting the benchmark datasets" in README.md.',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     records = []
     for subset, prefix in SUBSETS.items():
         for path in sorted((repo_dir / subset).glob("*.json"), key=lambda p: int(p.stem)):
@@ -47,6 +55,14 @@ def main() -> None:
                 "mistake_agent": raw.get("mistake_agent"),
                 "mistake_reason": raw.get("mistake_reason"),
             })
+
+    if not records:
+        print(
+            f"{repo_dir} holds no Who&When dataset (0 records found). "
+            'See "Getting the benchmark datasets" in README.md.',
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     out_file.write_text(json.dumps(records), encoding="utf-8")
     print(f"wrote {len(records)} records to {out_file}")

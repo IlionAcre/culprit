@@ -44,6 +44,14 @@ def main() -> None:
     dataset_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("data/benchmarks/trail")
     out_file = Path(sys.argv[2]) if len(sys.argv) > 2 else dataset_dir / "trail_all.json"
 
+    if not dataset_dir.exists():
+        print(
+            f"{dataset_dir} does not exist. The raw TRAIL dataset is not there; "
+            'see "Getting the benchmark datasets" in README.md.',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     records = []
     missing_annotations = []
     missing_traces = []
@@ -65,6 +73,14 @@ def main() -> None:
         for ann_path in sorted((dataset_dir / ann_dir).glob("*.json")):
             if not (dataset_dir / raw_dir / ann_path.name).exists():
                 missing_traces.append(ann_path.stem)
+
+    if not records:
+        print(
+            f"{dataset_dir} holds no raw TRAIL dataset (0 records found). "
+            'See "Getting the benchmark datasets" in README.md.',
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     out_file.write_text(json.dumps(records), encoding="utf-8")
     n_errors = sum(len(r["errors"]) for r in records)
