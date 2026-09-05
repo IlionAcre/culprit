@@ -1,8 +1,10 @@
 import json
+import os
 
+import psycopg
 from typer.testing import CliRunner
 
-from culprit.cli import app
+from culprit.cli import _redact_dsn, app
 from culprit.jobs import PersistenceNotWiredError
 from culprit.synth_results import make_diagnosis
 
@@ -119,7 +121,87 @@ def test_main_callback_sets_database_and_redis_url_env_vars_from_config(monkeypa
 
     runner.invoke(app, ["recluster"])
 
-    import os
-
     assert os.environ.get("CULPRIT_DATABASE_URL") == "postgresql://localhost:5432/culprit"
     assert os.environ.get("CULPRIT_REDIS_URL") == "redis://localhost:6379/0"
+
+
+def test_main_callback_treats_an_empty_database_url_env_var_as_unset(monkeypatch):
+    """The README's `cp .env.example .env && set -a && . ./.env` step
+    exports CULPRIT_DATABASE_URL present but blank; that must still fall
+    back to CulpritConfig.database_url rather than becoming a DSN of ''."""
+    monkeypatch.setenv("CULPRIT_DATABASE_URL", "")
+    monkeypatch.setattr("culprit.cli.enqueue_recluster", lambda: "job-1")
+
+    runner.invoke(app, ["recluster"])
+
+    assert os.environ.get("CULPRIT_DATABASE_URL") == "postgresql://localhost:5432/culprit"
+
+
+def test_main_callback_keeps_an_explicit_non_empty_database_url_env_var(monkeypatch):
+    monkeypatch.setenv("CULPRIT_DATABASE_URL", "postgresql://example.com:5432/mine")
+    monkeypatch.setattr("culprit.cli.enqueue_recluster", lambda: "job-1")
+
+    runner.invoke(app, ["recluster"])
+
+    assert os.environ.get("CULPRIT_DATABASE_URL") == "postgresql://example.com:5432/mine"
+
+
+def test_main_callback_treats_empty_redis_url_and_model_env_vars_as_unset(monkeypatch):
+    monkeypatch.setenv("CULPRIT_REDIS_URL", "   ")
+    monkeypatch.setenv("CULPRIT_MODEL", "")
+    monkeypatch.setattr("culprit.cli.enqueue_recluster", lambda: "job-1")
+
+    runner.invoke(app, ["recluster"])
+
+    assert os.environ.get("CULPRIT_REDIS_URL") == "redis://localhost:6379/0"
+    assert os.environ.get("CULPRIT_MODEL") == "gemini/gemini-2.5-flash-lite"
+
+
+def test_show_exits_nonzero_and_prints_message_when_postgres_is_unreachable(monkeypatch):
+    monkeypatch.setenv("CULPRIT_DATABASE_URL", "postgresql://localhost:5432/culprit")
+
+    def raising(trace_id):
+        raise psycopg.OperationalError("connection failed")
+
+    monkeypatch.setattr("culprit.cli.read_diagnoses_for_trace", raising)
+
+    result = runner.invoke(app, ["show", "trace-1"])
+
+    assert result.exit_code == 1
+    assert "postgresql://localhost:5432/culprit" in result.output
+    assert ".env" in result.output
+    assert "compose.yaml" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_show_redacts_the_database_password_from_the_unreachable_message(monkeypatch):
+    monkeypatch.setenv(
+        "CULPRIT_DATABASE_URL",
+        "postgresql://culprit_user:hunter2@db.internal:5432/culprit?sslmode=require",
+    )
+
+    def raising(trace_id):
+        raise psycopg.OperationalError("connection failed")
+
+    monkeypatch.setattr("culprit.cli.read_diagnoses_for_trace", raising)
+
+    result = runner.invoke(app, ["show", "trace-1"])
+
+    assert result.exit_code == 1
+    assert "hunter2" not in result.output
+    assert "sslmode" not in result.output
+    assert "culprit_user:***@db.internal:5432" in result.output
+
+
+def test_redact_dsn_reports_a_keyword_form_dsn_by_shape_rather_than_content():
+    redacted = _redact_dsn("host=db.internal port=5432 password=hunter2")
+
+    assert "hunter2" not in redacted
+    assert redacted == "<unparseable connection string>"
+
+
+def test_redact_dsn_leaves_a_credential_free_url_unchanged():
+    assert (
+        _redact_dsn("postgresql://localhost:5432/culprit")
+        == "postgresql://localhost:5432/culprit"
+    )

@@ -11,9 +11,13 @@ allows to run past the ~200 line ceiling if needed (Litmus's own cli.py is
 import logging
 import os
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
+import psycopg
 import typer
 from dotenv import load_dotenv
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from culprit.config import load_config
 from culprit.jobs import PersistenceNotWiredError, ingest_trace, read_diagnoses_for_trace
@@ -26,6 +30,56 @@ CONFIG = load_config()
 
 app = typer.Typer()
 logger = logging.getLogger(LOGGER_NAME)
+
+# psycopg.OperationalError covers psycopg_pool.PoolTimeout (its subclass),
+# raised when a pool cannot open against Postgres; the two redis errors
+# cover a refused or timed-out connection to Redis.
+_CONNECTION_ERRORS = (psycopg.OperationalError, RedisConnectionError, RedisTimeoutError)
+
+
+def _redact_dsn(dsn: str) -> str:
+    """Drop the password and any query string from a connection string, so
+    what reaches a terminal or a log file names the destination without the
+    credential that opens it. A DSN carries `user:password@host`, and this
+    message is echoed by every command below, so an unredacted one prints
+    the database password to whoever is watching a failed run. A value that
+    does not parse as a URL (psycopg also accepts `host=... password=...`
+    keyword form) is reported by shape rather than by content, so a
+    malformed string cannot leak through the fallback either."""
+    try:
+        parts = urlsplit(dsn)
+    except ValueError:
+        return "<unparseable connection string>"
+    if not parts.hostname:
+        return "<unparseable connection string>"
+    netloc = parts.hostname
+    if parts.port:
+        netloc = f"{netloc}:{parts.port}"
+    if parts.username:
+        netloc = f"{parts.username}:***@{netloc}"
+    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+
+
+def _connection_error_message(e: Exception) -> str:
+    """One line naming the destination culprit resolved, with the password
+    redacted, and the two places to check against a connection failure:
+    .env (is the value actually set) and compose.yaml (is the service
+    actually running). Stands in for psycopg's or redis's own exception,
+    which for a Postgres pool that cannot connect is a bare PoolTimeout
+    after a 30-second wait, with a driver traceback underneath it that
+    names nothing a reader can act on."""
+    if isinstance(e, psycopg.OperationalError):
+        dsn = os.environ.get("CULPRIT_DATABASE_URL", CONFIG.database_url)
+        return f"could not reach Postgres at {_redact_dsn(dsn)}. Check .env and compose.yaml."
+    dsn = os.environ.get("CULPRIT_REDIS_URL", CONFIG.redis_url)
+    return f"could not reach Redis at {_redact_dsn(dsn)}. Check .env and compose.yaml."
+
+
+def _default_env(key: str, default: str) -> None:
+    """Like os.environ.setdefault, but an empty or whitespace-only value
+    counts as unset too - see main()'s comment below for why."""
+    if not os.environ.get(key, "").strip():
+        os.environ[key] = default
 
 
 @app.callback()
@@ -50,11 +104,15 @@ def main(
     # Propagated via env var, not a direct import, into jobs.py/queue.py:
     # both read CULPRIT_DATABASE_URL/CULPRIT_REDIS_URL rather than
     # importing culprit.config, per CLAUDE.md's rule that only cli.py and
-    # plugin registries read config. setdefault so an explicit env var
-    # (or a test's monkeypatch.setenv) is never clobbered.
-    os.environ.setdefault("CULPRIT_DATABASE_URL", CONFIG.database_url)
-    os.environ.setdefault("CULPRIT_REDIS_URL", CONFIG.redis_url)
-    os.environ.setdefault("CULPRIT_MODEL", CONFIG.model)
+    # plugin registries read config. An explicit, non-empty value (or a
+    # test's monkeypatch.setenv) is never clobbered; an unset, empty, or
+    # whitespace-only value falls back to the config default instead - the
+    # README's `cp .env.example .env && set -a && . ./.env` step exports
+    # every key present but blank, and plain setdefault would have honored
+    # that blank as "explicitly set to nothing" rather than falling back.
+    _default_env("CULPRIT_DATABASE_URL", CONFIG.database_url)
+    _default_env("CULPRIT_REDIS_URL", CONFIG.redis_url)
+    _default_env("CULPRIT_MODEL", CONFIG.model)
 
 
 @app.command()
@@ -74,6 +132,9 @@ def ingest(
         logger.error("ingest failed", extra={"event": "ingest_failed", "error": str(e)})
         typer.echo(f"Error: {e}")
         raise typer.Exit(code=1) from e
+    except _CONNECTION_ERRORS as e:
+        typer.echo(f"Error: {_connection_error_message(e)}")
+        raise typer.Exit(code=1) from e
     typer.echo(f"Ingested trace {trace_id}")
 
 
@@ -82,7 +143,11 @@ def diagnose(trace_id: str = typer.Argument(...)) -> None:
     """Enqueue a diagnosis job for an already-ingested trace and print the
     job id. Poll it with `culprit job-status <job_id>` or read the result
     with `culprit show <trace_id>` once it completes."""
-    job_id = enqueue_diagnosis(trace_id)
+    try:
+        job_id = enqueue_diagnosis(trace_id)
+    except _CONNECTION_ERRORS as e:
+        typer.echo(f"Error: {_connection_error_message(e)}")
+        raise typer.Exit(code=1) from e
     logger.info(
         "diagnose enqueued",
         extra={"event": "diagnose_enqueued", "trace_id": trace_id, "job_id": job_id},
@@ -97,6 +162,9 @@ def show(trace_id: str = typer.Argument(...)) -> None:
         diagnoses = read_diagnoses_for_trace(trace_id)
     except PersistenceNotWiredError as e:
         typer.echo(f"Error: {e}")
+        raise typer.Exit(code=1) from e
+    except _CONNECTION_ERRORS as e:
+        typer.echo(f"Error: {_connection_error_message(e)}")
         raise typer.Exit(code=1) from e
     if not diagnoses:
         typer.echo(f"No diagnoses yet for trace {trace_id}")
@@ -115,7 +183,11 @@ def show(trace_id: str = typer.Argument(...)) -> None:
 @app.command("job-status")
 def job_status(job_id: str = typer.Argument(...)) -> None:
     """Poll one job's status (queued/started/finished/failed)."""
-    status = fetch_job_status(job_id)
+    try:
+        status = fetch_job_status(job_id)
+    except _CONNECTION_ERRORS as e:
+        typer.echo(f"Error: {_connection_error_message(e)}")
+        raise typer.Exit(code=1) from e
     view = job_status_view(status)
     typer.echo(
         f"[{view['status']}] {view['job_id']}: "
@@ -129,7 +201,11 @@ def recluster() -> None:
     accumulated diagnoses, never per trace, so this is triggered on
     demand or by an external scheduler rather than automatically after
     every diagnosis (see `culprit.jobs.recluster_job`)."""
-    job_id = enqueue_recluster()
+    try:
+        job_id = enqueue_recluster()
+    except _CONNECTION_ERRORS as e:
+        typer.echo(f"Error: {_connection_error_message(e)}")
+        raise typer.Exit(code=1) from e
     typer.echo(f"Enqueued recluster job {job_id}")
 
 
@@ -150,7 +226,11 @@ def bench(
     from culprit.embed import embed_texts
     from culprit.llm import litellm_call
 
-    conn_fn, recycle, close = pooled_conn_fn()
+    try:
+        conn_fn, recycle, close = pooled_conn_fn()
+    except _CONNECTION_ERRORS as e:
+        typer.echo(f"Error: {_connection_error_message(e)}")
+        raise typer.Exit(code=1) from e
     try:
         run = run_benchmark(
             benchmark, data, sample=sample, ablate=ablate,
