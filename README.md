@@ -40,6 +40,19 @@ About 40k input + 2.5k output tokens per diagnosis. On a Flash-Lite tier that is
 - Confidence calibration is inverted, and its historical fit population (~3,021 rows) was lost with no committed fit script. A calibration refit requires live services and benchmark spend, and is out of scope for this phase.
 - `culprit worker` needs Linux or WSL because RQ uses `os.fork`; it does not run on Windows.
 
+## Getting the benchmark datasets
+
+Neither prepare script downloads anything; both merge a dataset you already have on disk.
+
+- **TRAIL.** The public release is HuggingFace's `PatronusAI/TRAIL`, gated (request access there), or the ungated ModelScope mirror of the same files (Apache-2.0). Unpack it into one directory holding `GAIA/`, `SWE Bench/`, `processed_annotations_gaia/`, and `processed_annotations_swe_bench/` side by side (see `scripts/prepare_trail.py`'s module docstring for the exact layout). Default location: `data/benchmarks/trail`.
+- **Who&When.** Clone `github.com/mingyin1/Agents_Failure_Attribution`. `scripts/prepare_who_and_when.py` reads its `Who&When/Algorithm-Generated/` and `Who&When/Hand-Crafted/` directories (see that script's module docstring). Default location: `data/benchmarks/who_and_when/repo/Who&When`.
+
+With both in place:
+```bash
+uv run python scripts/prepare_trail.py
+uv run python scripts/prepare_who_and_when.py
+```
+
 ## Quickstart
 
 Walk from clone to a reproduced number:
@@ -61,9 +74,12 @@ docker compose up -d
 # or: podman-compose up -d
 ```
 
-4. Configure environment:
+4. Configure environment (this overwrites an existing `.env`):
 ```bash
 cp .env.example .env
+```
+Fill in `.env` before sourcing it. For the `docker compose` setup above, set `CULPRIT_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/culprit` and `CULPRIT_REDIS_URL=redis://localhost:6379/0`; set `GEMINI_API_KEY` to your own key for step 6's diagnosis. Then:
+```bash
 set -a && . ./.env && set +a
 ```
 
@@ -80,18 +96,20 @@ uv run culprit show a1b2c3d4e5f60718293a4b5c6d7e8f90
 uv run culprit recluster
 ```
 
-7. Prepare benchmark data and run the harness:
+7. Prepare benchmark data (see "Getting the benchmark datasets" above) and run the harness:
 ```bash
 uv run python scripts/prepare_trail.py
+uv run python scripts/prepare_who_and_when.py
 uv run python -m culprit.l1_eval
 ```
 
 ## Reproducing the benchmark numbers
 
-The offline evaluation harness requires no services, no API key, and no external spend. It evaluates the deterministic detector catalogue against the benchmark dataset in seconds:
+The offline evaluation harness requires no services, no API key, and no external spend, but it does need both benchmark datasets downloaded once first (see "Getting the benchmark datasets" above). It evaluates the deterministic detector catalogue against both benchmarks in about two minutes on the full datasets:
 
 ```bash
 uv run python scripts/prepare_trail.py
+uv run python scripts/prepare_who_and_when.py
 uv run python -m culprit.l1_eval
 ```
 
