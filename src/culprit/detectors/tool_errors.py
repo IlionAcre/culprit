@@ -16,6 +16,11 @@ _FAILURE_WORDS = (
     "error", "fail", "unable", "could not", "couldn't", "sorry", "apolog", "not found", "denied",
 )
 _SUCCESS_WORDS = ("success", "done", "complete", "resolved", "issued", "processed", "confirmed")
+# Multi-agent frameworks like AutoGen refine script outputs to tool spans
+# named execution_result. Interactive command stdout and stderr outputs,
+# including non-zero exit codes and tracebacks, represent execution feedback
+# to the agent rather than unhandled tool crashes.
+_BENIGN_TOOL_NAMES = frozenset({"execution_result"})
 
 
 def _is_empty_result(text: str) -> bool:
@@ -33,6 +38,8 @@ def tool_error(ctx: DetectorContext) -> list[Signal]:
             continue
         p = span.payload
         if span.status != SpanStatus.ERROR and not p.is_error:
+            continue
+        if p.tool_name.lower() in _BENIGN_TOOL_NAMES:
             continue
         signals.append(Signal(
             detector="tool_error", step_index=step.step_index, span_id=step.span_id,

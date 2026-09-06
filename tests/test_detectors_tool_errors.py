@@ -32,3 +32,22 @@ def test_tool_error_never_fires_on_twenty_clean_runs():
     for seed in range(20):
         run = successful_run(seed)
         assert tool_error(_ctx(run)) == []
+
+
+def test_tool_error_ignores_benign_execution_result():
+    base = successful_run(seed=1)
+    mutated, gt = inject(base, kind="tool_error", at_step=3)
+    mutated.spans[gt].payload.tool_name = "execution_result"
+    ctx = _ctx(mutated)
+    assert tool_error(ctx) == []
+
+
+def test_tool_error_fires_on_non_benign_tool_name():
+    base = successful_run(seed=1)
+    mutated, gt = inject(base, kind="tool_error", at_step=3)
+    mutated.spans[gt].payload.tool_name = "page_down"
+    ctx = _ctx(mutated)
+    signals = tool_error(ctx)
+    assert len(signals) == 1
+    assert signals[0].step_index == gt
+    assert signals[0].message == "page_down returned an error"
