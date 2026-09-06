@@ -28,7 +28,7 @@ L5 batch clustering      - recurring failure modes surface
 - Clean trace: the pipeline abstained rather than invent a fault.
 - Benchmark validation: on TRAIL, L1 evidenced candidates achieve 36.9% (211/572) precision against a 2.7% (2/73) filler baseline, with 76.7% (585/763) case coverage and 93.8% (121/129) trace-level coverage. On Who&When, reasoning mistakes remain harder to separate deterministically: L1 evidenced reaches 9.1% (16/176) against a 9.8% (65/661) filler baseline, with 8.7% (16/184) coverage.
 
-Offline: 587 tests pass, 19 skipped (606 collected). With live Postgres + pgvector: 593 tests pass. CLI e2e (migrate, ingest, diagnose, show, recluster) verified against real Postgres and Redis.
+Offline: 598 tests pass, 19 skipped (617 collected). With live Postgres + pgvector: 617 tests pass. CLI e2e (migrate, ingest, diagnose, show, recluster) verified against real Postgres and Redis.
 
 ## Cost
 
@@ -72,14 +72,31 @@ CULPRIT_TEST_DSN= uv run pytest -q
 3. Start services:
 ```bash
 docker compose up -d
-# or: podman-compose up -d
+# or: podman compose up -d
 ```
+If using Podman on Windows, install `podman-compose` first with `uv tool install podman-compose`.
 
 4. Configure environment (this overwrites an existing `.env`):
 ```bash
 cp .env.example .env
 ```
-Fill in `.env` before sourcing it. For the `docker compose` setup above, set `CULPRIT_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/culprit` and `CULPRIT_REDIS_URL=redis://localhost:6379/0`; set `GEMINI_API_KEY` to your own key for step 6's diagnosis. Then:
+Fill in `.env` before sourcing it.
+
+When running Docker on Linux or macOS, use localhost:
+- `CULPRIT_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/culprit`
+- `CULPRIT_REDIS_URL=redis://localhost:6379/0`
+
+When running Podman on Windows, Podman publishes container ports to the WSL2 virtual machine IP instead of Windows localhost. If a native Windows PostgreSQL service runs on port 5432, connecting to localhost reaches the host service without pgvector instead of the container. Redis connections to localhost fail with connection refused.
+
+To find the WSL2 virtual machine IP, run:
+```bash
+wsl -d podman-machine-default ip addr show eth0
+```
+Use the returned IPv4 address:
+- `CULPRIT_DATABASE_URL=postgresql://postgres:postgres@<vm-ip>:5432/culprit`
+- `CULPRIT_REDIS_URL=redis://<vm-ip>:6379/0`
+
+Before running step 6, set `GEMINI_API_KEY` to your key. Then export the variables:
 ```bash
 set -a && . ./.env && set +a
 ```

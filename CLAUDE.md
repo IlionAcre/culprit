@@ -1138,6 +1138,32 @@ benchmarks among them.
   Windows" below for the full detail (trace id, job id, worker log excerpt,
   and the `culprit show` output). Both gaps closed in one WSL2 session.
 
+**Verified 2026-09-06 against live services (Phase 7 Task 5):**
+
+- **Live services started from compose.yaml with podman on Windows.**
+  `podman compose up -d` started both `pgvector/pgvector:pg16` (container
+  `culprit_postgres_1`) and `redis:7-alpine` (container `culprit_redis_1`).
+  On Windows, `podman compose` delegates to `podman-compose` on PATH.
+- **Localhost versus VM IP behavior settled.**
+  Podman on Windows WSL2 publishes ports inside the WSL2 virtual machine at
+  `172.27.120.193`, not on Windows `localhost`. Attempting to reach
+  `localhost:5432` connected to a local native Windows PostgreSQL instance
+  lacking pgvector, while `localhost:6379` failed with connection refused.
+  Connecting to `172.27.120.193:5432` and `172.27.120.193:6379` reached the
+  intended containers directly.
+- **CLI end-to-end verified against real Postgres and Redis.**
+  Ran `uv run alembic upgrade head` applying revisions 0001, 0002, and 0003.
+  Ingested `tests/fixtures/otlp/otel_genai_sample.json` (trace
+  `a1b2c3d4e5f60718293a4b5c6d7e8f90`). Diagnosed the trace via `culprit
+  diagnose`, processed the queued job with `SimpleWorker`, and confirmed
+  abstention with `culprit show` (`abstained=True`, `step=None`). Ran `culprit
+  recluster` to update cluster assignments. Current L1 version is 1.2.0.
+- **Suite count with live services measured.**
+  With `CULPRIT_TEST_DSN="postgresql://postgres:postgres@172.27.120.193:5432/culprit_test"`:
+  617 passed, 0 skipped, 1 warning (617 collected) in 66.69s.
+  Offline run with empty `CULPRIT_TEST_DSN`:
+  598 passed, 19 skipped, 1 warning (617 collected) in 43.77s.
+
 ## Status
 
 Phase 2 closeout landed on `main`. Integration items I1-I7 are done: I7
