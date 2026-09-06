@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Run offline test suite
+        env:
+          CULPRIT_TEST_DSN: ""
+        run: uv run pytest -q
+
+      - name: Check README test counts
+        env:
+          CULPRIT_TEST_DSN: ""
+        run: uv run python scripts/check_readme_counts.py

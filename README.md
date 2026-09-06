@@ -1,5 +1,6 @@
 # culprit
 
+[![CI](https://github.com/IlionAcre/culprit/actions/workflows/ci.yml/badge.svg)](https://github.com/IlionAcre/culprit/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.12%2B-blue)
 ![License](https://img.shields.io/badge/license-custom-blue)
 
@@ -27,7 +28,7 @@ L5 batch clustering      - recurring failure modes surface
 - Clean trace: the pipeline abstained rather than invent a fault.
 - Benchmark validation: on TRAIL, L1 evidenced candidates achieve 36.9% (211/572) precision against a 2.7% (2/73) filler baseline, with 76.7% (585/763) case coverage and 93.8% (121/129) trace-level coverage. On Who&When, reasoning mistakes remain harder to separate deterministically: L1 evidenced reaches 9.1% (16/176) against a 9.8% (65/661) filler baseline, with 8.7% (16/184) coverage.
 
-Offline: 574 tests pass, 19 skipped (593 collected). With live Postgres + pgvector: 593 tests pass. CLI e2e (migrate, ingest, diagnose, show, recluster) verified against real Postgres and Redis.
+Offline: 587 tests pass, 19 skipped (606 collected). With live Postgres + pgvector: 593 tests pass. CLI e2e (migrate, ingest, diagnose, show, recluster) verified against real Postgres and Redis.
 
 ## Cost
 
