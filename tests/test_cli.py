@@ -63,6 +63,7 @@ def test_ingest_exits_nonzero_and_prints_error_when_persistence_not_wired(tmp_pa
 
 
 def test_diagnose_enqueues_and_prints_the_job_id(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr("culprit.cli.enqueue_diagnosis", lambda trace_id: "job-1")
 
     result = runner.invoke(app, ["diagnose", "trace-1"])
@@ -205,3 +206,80 @@ def test_redact_dsn_leaves_a_credential_free_url_unchanged():
         _redact_dsn("postgresql://localhost:5432/culprit")
         == "postgresql://localhost:5432/culprit"
     )
+
+
+def test_diagnose_fails_when_gemini_api_key_is_missing(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    result = runner.invoke(app, ["diagnose", "trace-1"])
+
+    assert result.exit_code == 1
+    assert "GEMINI_API_KEY" in result.output
+    assert ".env.example" in result.output
+
+
+def test_diagnose_fails_when_gemini_api_key_is_empty(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "   ")
+
+    result = runner.invoke(app, ["diagnose", "trace-1"])
+
+    assert result.exit_code == 1
+    assert "GEMINI_API_KEY" in result.output
+    assert ".env.example" in result.output
+
+
+def test_planted_secret_in_dsn_is_never_printed_in_error_output(monkeypatch):
+    planted_secret = "PLANTED_SUPER_SECRET_VALUE_98765"
+    monkeypatch.setenv(
+        "CULPRIT_DATABASE_URL",
+        f"postgresql://culprit_user:{planted_secret}@db.internal:5432/culprit?secret_param={planted_secret}",
+    )
+
+    def raising(trace_id):
+        raise psycopg.OperationalError("connection failed")
+
+    monkeypatch.setattr("culprit.cli.read_diagnoses_for_trace", raising)
+
+    result = runner.invoke(app, ["show", "trace-1"])
+
+    assert result.exit_code == 1
+    assert planted_secret not in result.output
+    assert "culprit_user:***@db.internal:5432" in result.output
+
+
+def test_planted_secret_in_redis_dsn_is_never_printed_in_error_output(monkeypatch):
+    planted_secret = "REDIS_SUPER_SECRET_XYZ"
+    monkeypatch.setenv(
+        "CULPRIT_REDIS_URL",
+        f"redis://:{planted_secret}@localhost:6379/0",
+    )
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    def raising(trace_id):
+        raise RedisConnectionError("redis connection failed")
+
+    monkeypatch.setattr("culprit.cli.enqueue_diagnosis", raising)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    result = runner.invoke(app, ["diagnose", "trace-1"])
+
+    assert result.exit_code == 1
+    assert planted_secret not in result.output
+    assert ":***@localhost:6379" in result.output
+
+
+def test_connection_failure_returns_quickly_without_driver_noise(monkeypatch):
+    import time
+
+    monkeypatch.setenv("CULPRIT_DATABASE_URL", "postgresql://localhost:54321/culprit")
+
+    t0 = time.perf_counter()
+    result = runner.invoke(app, ["show", "trace-1"])
+    elapsed = time.perf_counter() - t0
+
+    assert result.exit_code == 1
+    assert elapsed < 10.0
+    assert "could not reach Postgres at postgresql://localhost:54321/culprit" in result.output
+    assert "couldn't stop thread" not in result.output
+    assert "Traceback" not in result.output
+    assert "error connecting in" not in result.output

@@ -16,6 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 import psycopg
 import typer
 from dotenv import load_dotenv
+from psycopg_pool import ConnectionPool
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
@@ -30,6 +31,36 @@ CONFIG = load_config()
 
 app = typer.Typer()
 logger = logging.getLogger(LOGGER_NAME)
+
+# Quiet psycopg and psycopg_pool loggers so driver noise does not clutter
+# terminal output on connection failure.
+logging.getLogger("psycopg").setLevel(logging.CRITICAL)
+logging.getLogger("psycopg.pool").setLevel(logging.CRITICAL)
+
+# Shorten connection timeouts for CLI database operations so failures surface
+# quickly (under 10 seconds) instead of waiting 30 seconds.
+CLI_CONNECT_TIMEOUT_SECONDS = 4.0
+
+
+def _default_env(key: str, default: str) -> None:
+    """Like os.environ.setdefault, but an empty or whitespace-only value
+    counts as unset too - see main()'s comment below for why."""
+    if not os.environ.get(key, "").strip():
+        os.environ[key] = default
+
+
+_default_env("PGCONNECT_TIMEOUT", "4")
+
+_orig_pool_init = ConnectionPool.__init__
+
+
+def _cli_pool_init(self, *args, **kwargs):
+    if "timeout" not in kwargs or kwargs["timeout"] == 30.0:
+        kwargs["timeout"] = CLI_CONNECT_TIMEOUT_SECONDS
+    return _orig_pool_init(self, *args, **kwargs)
+
+
+ConnectionPool.__init__ = _cli_pool_init
 
 # psycopg.OperationalError covers psycopg_pool.PoolTimeout (its subclass),
 # raised when a pool cannot open against Postgres; the two redis errors
@@ -55,8 +86,9 @@ def _redact_dsn(dsn: str) -> str:
     netloc = parts.hostname
     if parts.port:
         netloc = f"{netloc}:{parts.port}"
-    if parts.username:
-        netloc = f"{parts.username}:***@{netloc}"
+    if parts.username or parts.password:
+        user = parts.username or ""
+        netloc = f"{user}:***@{netloc}"
     return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
@@ -66,7 +98,7 @@ def _connection_error_message(e: Exception) -> str:
     .env (is the value actually set) and compose.yaml (is the service
     actually running). Stands in for psycopg's or redis's own exception,
     which for a Postgres pool that cannot connect is a bare PoolTimeout
-    after a 30-second wait, with a driver traceback underneath it that
+    after a short wait, with a driver traceback underneath it that
     names nothing a reader can act on."""
     if isinstance(e, psycopg.OperationalError):
         dsn = os.environ.get("CULPRIT_DATABASE_URL", CONFIG.database_url)
@@ -75,11 +107,20 @@ def _connection_error_message(e: Exception) -> str:
     return f"could not reach Redis at {_redact_dsn(dsn)}. Check .env and compose.yaml."
 
 
-def _default_env(key: str, default: str) -> None:
-    """Like os.environ.setdefault, but an empty or whitespace-only value
-    counts as unset too - see main()'s comment below for why."""
-    if not os.environ.get(key, "").strip():
-        os.environ[key] = default
+def _check_gemini_api_key() -> None:
+    """Ensure GEMINI_API_KEY is present and non-empty.
+
+    Commands reaching an LLM call this check at the CLI boundary. If the key is
+    missing, exit nonzero naming the variable and .env.example.
+    """
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not key:
+        typer.echo(
+            "Error: GEMINI_API_KEY is unset or empty. "
+            "Set GEMINI_API_KEY in .env before running this command. "
+            "See .env.example."
+        )
+        raise typer.Exit(code=1)
 
 
 @app.callback()
@@ -113,6 +154,9 @@ def main(
     _default_env("CULPRIT_DATABASE_URL", CONFIG.database_url)
     _default_env("CULPRIT_REDIS_URL", CONFIG.redis_url)
     _default_env("CULPRIT_MODEL", CONFIG.model)
+    _default_env("PGCONNECT_TIMEOUT", "4")
+    logging.getLogger("psycopg").setLevel(logging.CRITICAL)
+    logging.getLogger("psycopg.pool").setLevel(logging.CRITICAL)
 
 
 @app.command()
@@ -143,6 +187,7 @@ def diagnose(trace_id: str = typer.Argument(...)) -> None:
     """Enqueue a diagnosis job for an already-ingested trace and print the
     job id. Poll it with `culprit job-status <job_id>` or read the result
     with `culprit show <trace_id>` once it completes."""
+    _check_gemini_api_key()
     try:
         job_id = enqueue_diagnosis(trace_id)
     except _CONNECTION_ERRORS as e:
@@ -222,6 +267,7 @@ def bench(
     each benchmark trace through the production tables, diagnose inline (no
     RQ worker, which cannot run on Windows), and print the scored report -
     every tolerance band, never only the flattering one."""
+    _check_gemini_api_key()
     from culprit.bench import pooled_conn_fn, run_benchmark
     from culprit.embed import embed_texts
     from culprit.llm import litellm_call
@@ -279,6 +325,7 @@ def serve(
 def worker() -> None:
     """Launch one RQ worker process, pulling from the same queue
     `culprit diagnose`/`culprit recluster` enqueue onto."""
+    _check_gemini_api_key()
     from culprit.worker import run_worker
 
     run_worker()

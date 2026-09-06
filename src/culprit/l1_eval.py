@@ -43,6 +43,22 @@ BENCHMARK_DATA = {
     / "who_and_when"
     / "who_and_when_all.json",
 }
+BENCHMARK_PREPARE_SCRIPTS = {
+    "trail": "scripts/prepare_trail.py",
+    "who_and_when": "scripts/prepare_who_and_when.py",
+}
+README_DATASETS_SECTION = "Getting the benchmark datasets"
+
+
+def _format_absent_dataset_message(name: str, path: Path | None = None) -> str:
+    target_path = path or BENCHMARK_DATA[name]
+    script = BENCHMARK_PREPARE_SCRIPTS.get(name, f"prepare script for {name}")
+    return (
+        f"Benchmark dataset {name!r} is absent: {target_path} not found. "
+        f"To produce it, run {script}. "
+        f"See '{README_DATASETS_SECTION}' in README.md."
+    )
+
 
 SOURCE_ORDER = ("filler", "l1", "l2", "both", "fallback")
 EVIDENCED_SOURCES = {"l1", "l2", "both"}
@@ -227,6 +243,8 @@ def evaluate_benchmark(
     """
     detectors = DETECTORS if detectors is None else detectors
     path = data_path or BENCHMARK_DATA[name]
+    if not path.exists():
+        raise FileNotFoundError(_format_absent_dataset_message(name, path))
     adapter = BENCHMARKS[name]
     cases = adapter(path)
     cases_by_trace: dict[str, list[BenchmarkCase]] = defaultdict(list)
@@ -366,13 +384,50 @@ def _print_benchmark(result: BenchmarkResult) -> None:
     )
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> None:
     """Entry point for `uv run python -m culprit.l1_eval`."""
+    import argparse
+    import sys
+
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
-    for name in ("trail", "who_and_when"):
+
+    parser = argparse.ArgumentParser(description="Offline L1 evaluation harness.")
+    parser.add_argument(
+        "--dataset",
+        choices=list(BENCHMARK_DATA.keys()),
+        default=None,
+        help="Specifically requested benchmark dataset (trail or who_and_when).",
+    )
+    args = parser.parse_args(argv)
+
+    if args.dataset:
+        path = BENCHMARK_DATA[args.dataset]
+        if not path.exists():
+            print(_format_absent_dataset_message(args.dataset, path), file=sys.stderr)
+            sys.exit(1)
+        result = evaluate_benchmark(args.dataset)
+        result.leave_one_out = _leave_one_out(args.dataset)
+        _print_benchmark(result)
+        return
+
+    present = [name for name in ("trail", "who_and_when") if BENCHMARK_DATA[name].exists()]
+    absent = [name for name in ("trail", "who_and_when") if not BENCHMARK_DATA[name].exists()]
+
+    if not present:
+        for name in absent:
+            print(
+                _format_absent_dataset_message(name, BENCHMARK_DATA[name]),
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    for name in present:
         result = evaluate_benchmark(name)
         result.leave_one_out = _leave_one_out(name)
         _print_benchmark(result)
+
+    for name in absent:
+        print(f"\n{_format_absent_dataset_message(name, BENCHMARK_DATA[name])}")
 
 
 if __name__ == "__main__":

@@ -205,3 +205,109 @@ def test_trail_evidenced_per_candidate_rate_regression_guard():
         f"TRAIL evidenced per-candidate rate {result.evidenced_rate:.3f} "
         f"dropped below 0.30 regression floor"
     )
+
+
+def test_missing_dataset_exits_nonzero_and_names_file_and_prepare_script(
+    monkeypatch, tmp_path, capsys
+):
+    import pytest
+    from culprit import l1_eval
+
+    missing_trail = tmp_path / "absent_trail.json"
+    missing_who = tmp_path / "absent_who.json"
+    monkeypatch.setattr(
+        l1_eval,
+        "BENCHMARK_DATA",
+        {"trail": missing_trail, "who_and_when": missing_who},
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        l1_eval.main([])
+    assert exc_info.value.code != 0
+
+    err = capsys.readouterr().err
+    assert str(missing_trail) in err
+    assert str(missing_who) in err
+    assert "scripts/prepare_trail.py" in err
+    assert "scripts/prepare_who_and_when.py" in err
+    assert "Getting the benchmark datasets" in err
+
+
+def test_specifically_requested_missing_dataset_exits_nonzero(
+    monkeypatch, tmp_path, capsys
+):
+    import pytest
+    from culprit import l1_eval
+
+    missing_trail = tmp_path / "absent_trail.json"
+    monkeypatch.setattr(
+        l1_eval,
+        "BENCHMARK_DATA",
+        {"trail": missing_trail, "who_and_when": tmp_path / "absent_who.json"},
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        l1_eval.main(["--dataset", "trail"])
+    assert exc_info.value.code != 0
+
+    err = capsys.readouterr().err
+    assert str(missing_trail) in err
+    assert "scripts/prepare_trail.py" in err
+    assert "Getting the benchmark datasets" in err
+
+
+def test_partial_dataset_presence_evaluates_present_and_reports_absent(
+    monkeypatch, tmp_path, capsys
+):
+    from culprit import l1_eval
+
+    existing_trail = tmp_path / "trail_all.json"
+    existing_trail.write_text("[]", encoding="utf-8")
+    missing_who = tmp_path / "absent_who.json"
+
+    monkeypatch.setattr(
+        l1_eval,
+        "BENCHMARK_DATA",
+        {"trail": existing_trail, "who_and_when": missing_who},
+    )
+
+    fake_result = l1_eval.BenchmarkResult(
+        name="trail",
+        total_traces=0,
+        processed_traces=0,
+        failed_traces=0,
+        source_counts={src: [0, 0] for src in l1_eval.SOURCE_ORDER},
+        detector_counts={},
+        cases_total=0,
+        cases_l1_flagged=0,
+        cases_evidenced=0,
+        traces_with_truth=0,
+        traces_l1_covered=0,
+        filler_rate=0.0,
+        evidenced_rate=0.0,
+        leave_one_out={},
+    )
+    monkeypatch.setattr(l1_eval, "evaluate_benchmark", lambda name, **kw: fake_result)
+    monkeypatch.setattr(l1_eval, "_leave_one_out", lambda name, **kw: {})
+
+    l1_eval.main([])
+
+    out = capsys.readouterr().out
+    assert "Benchmark: trail" in out
+    assert str(missing_who) in out
+    assert "scripts/prepare_who_and_when.py" in out
+    assert "Getting the benchmark datasets" in out
+
+
+def test_evaluate_benchmark_raises_filenotfound_when_missing(tmp_path):
+    import pytest
+    from culprit.l1_eval import evaluate_benchmark
+
+    missing_path = tmp_path / "absent.json"
+    with pytest.raises(FileNotFoundError) as exc_info:
+        evaluate_benchmark("trail", data_path=missing_path)
+
+    msg = str(exc_info.value)
+    assert str(missing_path) in msg
+    assert "scripts/prepare_trail.py" in msg
+    assert "Getting the benchmark datasets" in msg
