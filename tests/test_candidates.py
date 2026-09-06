@@ -270,10 +270,13 @@ def test_who_and_when_traces_merge_without_exception():
     Before the fix, five traces hit the _spread_evenly division-by-zero and
     lost their whole shortlist.
     """
+    import pytest
     from culprit.benchmarks.registry import BENCHMARKS
     from culprit.run_detectors import run_detectors
 
     data = Path(__file__).parents[1] / "data" / "benchmarks" / "who_and_when" / "who_and_when_all.json"
+    if not data.exists():
+        pytest.skip(f"benchmark dataset {data} not found; run scripts/prepare_who_and_when.py")
     cases = BENCHMARKS["who_and_when"](data)
 
     by_trace: dict[tuple[str, int], tuple[Trace, list[Step], dict[str, Span]]] = {}
