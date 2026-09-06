@@ -26,7 +26,7 @@ L5 batch clustering      - recurring failure modes surface
 
 - Injected fault: a synth trace with an `empty_tool_result` fault was diagnosed as step 3, `silent_empty_result_misread`, confidence 0.90. One call to `gemini/gemini-2.5-flash-lite`, $0.00023.
 - Clean trace: the pipeline abstained rather than invent a fault.
-- Benchmark validation: on TRAIL, L1 evidenced candidates achieve 36.9% (211/572) precision against a 2.7% (2/73) filler baseline, with 76.7% (585/763) case coverage and 93.8% (121/129) trace-level coverage. On Who&When, reasoning mistakes remain harder to separate deterministically: L1 evidenced reaches 9.1% (16/176) against a 9.8% (65/661) filler baseline, with 8.7% (16/184) coverage.
+- Benchmark validation: on TRAIL, L1 evidenced candidates achieve 36.9% (211/572) precision against a 2.7% (2/73) filler baseline, with 76.7% (585/763) case coverage and 93.8% (121/129) trace-level coverage. On Who&When, L1 evidenced candidates achieve 17.4% (15/86) precision against a 10.3% (73/709) filler baseline, with 8.7% (16/184) coverage, after filtering benign execution_result spans in tool_error.
 
 Offline: 598 tests pass, 19 skipped (617 collected). With live Postgres + pgvector: 617 tests pass. CLI e2e (migrate, ingest, diagnose, show, recluster) verified against real Postgres and Redis.
 
@@ -36,7 +36,7 @@ About 40k input + 2.5k output tokens per diagnosis. On a Flash-Lite tier that is
 
 ## Not yet
 
-- Who&When reasoning mistakes trail filler: L1 evidenced candidates reach 9.1% against a 9.8% filler baseline. Who&When places 98.9% of its ground truth on agent reasoning turns rather than tool calls, where deterministic string and structural checks struggle to match semantic intent.
+- Who&When now beats filler (+7.1 percentage points: 17.4% vs 10.3%), but 98.9% of Who&When ground truth is on agent reasoning turns where deterministic checks have modest coverage (8.7%).
 - L2 contrastive top-1 is 44% across the 18 injection kinds that reach `contrast()` (against an 80% aspiration), and contributes nothing measurable on real benchmark traces.
 - Confidence calibration is inverted, and its historical fit population (~3,021 rows) was lost with no committed fit script. A calibration refit requires live services and benchmark spend, and is out of scope for this phase.
 - `culprit worker` needs Linux or WSL because RQ uses `os.fork`; it does not run on Windows.

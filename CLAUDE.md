@@ -1044,35 +1044,43 @@ Who&When (184 traces, 184 cases):
 
 | Candidate source | Count | On-truth rate |
 |---|---|---|
-| filler | 65/661 | 9.8% |
-| l1 | 16/176 | 9.1% |
-| evidenced (l1/l2/both) | 16/176 | 9.1% |
+| filler | 73/709 | 10.3% |
+| l1 | 15/86 | 17.4% |
+| evidenced (l1/l2/both) | 15/86 | 17.4% |
 
 Phase 6 added `reasoning_turn_defect` to target agent reasoning turns
 (`SpanKind.AGENT`), detecting unverified assumptions, simulated data shortcuts,
-and malformed code blocks. On Who&When, it fires 63 signals with 15 hits (23.8%
-hit rate), clearing the 9.8% filler rate. Coverage on Who&When improved from
-0.5% (1/184) to 8.7% (16/184), and evidenced candidates rose from 0.9% (1/113)
-to 9.1% (16/176).
+and malformed code blocks. It fires 63 signals with 15 hits (23.8% per-signal
+hit rate). When originally shipped in Phase 6, candidate-level evidenced
+precision sat at 9.1% (16/176) against a 9.8% (65/661) filler baseline. The
+deficit was caused by `tool_error`, which fired 90 false positive signals with
+only 1 hit (1.1% hit rate) on benign execution outputs, diluting the candidate pool.
+
+Phase 7 Task 4 resolved this dilution. Filtering benign `execution_result`
+spans in `tool_error` eliminated 90 false positive signals on Who&When.
+Candidate-level evidenced precision rose to 17.4% (15/86) against a 10.3%
+(73/709) filler baseline, with 8.7% (16/184) coverage.
 
 Leave-one-out confirms `reasoning_turn_defect` carries the Who&When result:
-unregistering it drops evidenced back to 0.9% and raises filler to 11.4%.
-
-**Recorded negative result on Who&When candidate merge.** Although
-`reasoning_turn_defect` achieved a 23.8% per-signal hit rate, the aggregate
-candidate-level evidenced rate (9.1%) remains below the filler baseline (9.8%).
-The culprit is `tool_error`, which fires 90 signals with only 1 hit (1.1% hit
-rate) on Who&When execution turns, diluting the candidate pool. In
-leave-one-out analysis, removing `tool_error` raises Who&When evidenced to 17.4%
-against 10.3% filler.
+unregistering it drops evidenced to 0.0% and raises filler to 11.7%.
 
 **Outcome across benchmarks.**
 
 | Benchmark, per candidate | Evidenced | Filler |
 |---|---:|---:|
 | TRAIL (all 129 traces) | 36.9% | 2.7% |
-| Who&When (all 184 traces) | 9.1% | 9.8% |
-| Who&When without tool_error | 17.4% | 10.3% |
+| Who&When (all 184 traces) | 17.4% | 10.3% |
+
+### Known deviation: Phase 6 Task 4 shipped below candidate-level baseline
+
+Phase 6 Task 4 shipped `reasoning_turn_defect` while candidate-level evidenced
+precision sat at 9.1% vs 9.8% filler. The detector itself achieved 23.8%
+per-signal precision (15 hits across 63 signals). The candidate-level deficit
+was caused by `tool_error` dilution, which fired 90 signals with only 1 hit on
+benign script execution outputs. Shipping the detector preserved real signal
+while isolating the dilution mechanism. Phase 7 Task 4 closed this deviation
+by filtering benign `execution_result` spans in `tool_error`, lifting Who&When
+evidenced candidate precision to 17.4% vs 10.3% filler.
 
 ## What was verified vs what remains unverified
 
@@ -1157,7 +1165,7 @@ benchmarks among them.
   `a1b2c3d4e5f60718293a4b5c6d7e8f90`). Diagnosed the trace via `culprit
   diagnose`, processed the queued job with `SimpleWorker`, and confirmed
   abstention with `culprit show` (`abstained=True`, `step=None`). Ran `culprit
-  recluster` to update cluster assignments. Current L1 version is 1.2.0.
+  recluster` to update cluster assignments. Current L1 version is 1.3.0.
 - **Suite count with live services measured.**
   With `CULPRIT_TEST_DSN="postgresql://postgres:postgres@172.27.120.193:5432/culprit_test"`:
   617 passed, 0 skipped, 1 warning (617 collected) in 66.69s.
