@@ -28,7 +28,7 @@ L5 batch clustering      - recurring failure modes surface
 - Clean trace: the pipeline abstained rather than invent a fault.
 - Benchmark validation: on TRAIL, L1 evidenced candidates achieve 36.9% (211/572) precision against a 2.7% (2/73) filler baseline, with 76.7% (585/763) case coverage and 93.8% (121/129) trace-level coverage. On Who&When, L1 evidenced candidates achieve 17.4% (15/86) precision against a 10.3% (73/709) filler baseline, with 8.7% (16/184) coverage, after filtering benign execution_result spans in tool_error.
 
-Offline: 598 tests pass, 19 skipped (617 collected). With live Postgres + pgvector: 617 tests pass. CLI e2e (migrate, ingest, diagnose, show, recluster) verified against real Postgres and Redis.
+Offline: 596 tests pass, 21 skipped (617 collected) from a clean clone, which is what CI runs. Preparing the benchmark datasets turns two of those skips into passes. With live Postgres + pgvector: 617 tests pass, measured 2026-09-06. CLI e2e (migrate, ingest, diagnose, show, recluster) verified against real Postgres and Redis.
 
 ## Cost
 

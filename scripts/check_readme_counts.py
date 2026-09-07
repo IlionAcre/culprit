@@ -63,9 +63,18 @@ def parse_readme_counts(readme_text: str) -> tuple[int, int, int]:
 
 
 def run_offline_suite(repo_root: Path) -> tuple[str, int]:
-    """Run uv run pytest -q with empty CULPRIT_TEST_DSN and return output and exit code."""
+    """Run the suite the way a fresh clone runs it, and return output and exit code.
+
+    Two things make the counts machine-dependent, and both are pinned here so
+    the number this script checks is the number a reader gets. Blanking
+    CULPRIT_TEST_DSN skips the database-gated tests. Setting
+    CULPRIT_SKIP_DATASET_TESTS skips the benchmark regression tests, which
+    would otherwise run for whoever prepared the gitignored `data/` and skip
+    for everyone else, so a maintainer's machine and CI disagreed by two.
+    """
     env = os.environ.copy()
     env["CULPRIT_TEST_DSN"] = ""
+    env["CULPRIT_SKIP_DATASET_TESTS"] = "1"
     uv_bin = shutil.which("uv") or "uv"
     proc = subprocess.run(
         [uv_bin, "run", "pytest", "-q"],
@@ -98,6 +107,16 @@ def main() -> int:
         flush=True,
     )
     output, returncode = run_offline_suite(repo_root)
+
+    # CI runs this script instead of a separate pytest step, so a red suite
+    # has to fail here rather than being reported only as a count mismatch.
+    if returncode != 0:
+        print(output, file=sys.stderr)
+        print(
+            f"Error: offline test suite failed (pytest exit code {returncode}).",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         suite_passed, suite_skipped, suite_collected = parse_pytest_output(output)

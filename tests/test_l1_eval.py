@@ -194,12 +194,11 @@ def test_trail_evidenced_per_candidate_rate_regression_guard():
     The floor sits at 0.30 so ordinary drift passes and a regression that
     gives back the Phase 5 gain fails.
     """
-    import pytest
+    from conftest import require_dataset
+
     from culprit.l1_eval import BENCHMARK_DATA
 
-    trail_path = BENCHMARK_DATA["trail"]
-    if not trail_path.exists():
-        pytest.skip(f"benchmark dataset {trail_path} not found; run scripts/prepare_trail.py")
+    require_dataset(BENCHMARK_DATA["trail"], "scripts/prepare_trail.py")
     result = evaluate_benchmark("trail")
     assert result.evidenced_rate >= 0.30, (
         f"TRAIL evidenced per-candidate rate {result.evidenced_rate:.3f} "

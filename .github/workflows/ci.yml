@@ -11,20 +11,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
           enable-cache: true
 
-      - name: Run offline test suite
-        env:
-          CULPRIT_TEST_DSN: ""
-        run: uv run pytest -q
-
-      - name: Check README test counts
-        env:
-          CULPRIT_TEST_DSN: ""
+      # Runs the suite and compares its counts against README.md's claim.
+      # The suite is not run separately first: this step runs it, so a test
+      # failure fails the job here rather than costing a second full run.
+      - name: Run offline test suite and check README counts
         run: uv run python scripts/check_readme_counts.py

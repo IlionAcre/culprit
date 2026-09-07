@@ -488,8 +488,10 @@ problem as detecting an anomalous step sequence in an agent trace.
   carries signal, and stays blocked on data: the ~3,021-row population it would
   fit is unrecoverable, so a fresh paid benchmark run has to come first.
   Migration `0003` was applied to both databases to close the divergence, and
-  the full DSN-gated suite passes (593 passed with `CULPRIT_TEST_DSN` set, 574
-  passed / 19 skipped offline, measured on 2026-09-04). What survives is the
+  the full DSN-gated suite passes (617 passed with `CULPRIT_TEST_DSN` set, 596
+  passed / 21 skipped on a clean clone, measured on 2026-09-06; the earlier
+  with-services figure recorded here was inferred arithmetic, never a run).
+  What survives is the
   candidate-recall series, because the new offline L1 harness regenerates it
   from raw annotations with no database and no LLM. Any future run that needs
   persisted benchmark data must re-generate or import the ~3,021-row
@@ -672,7 +674,7 @@ pin.
 
 ## Known gotcha: `.env` silently turns on Postgres-gated tests
 
-`src/culprit/cli.py` calls `load_dotenv()` at import, so any variable in a `.env` file is present before pytest collects tests. If `.env` sets `CULPRIT_TEST_DSN`, a plain `uv run pytest -q` runs the 19 database-gated tests instead of skipping them. With services up this is why the suite reports 593 passes. If the Postgres container is stopped, the command hangs with no output (killed after 15 minutes on 2026-09-04), compared to 35 seconds for the same suite with the DSN blanked. Either keep `.env` unset when you want the offline-only run, or blank `CULPRIT_TEST_DSN` before pytest.
+`src/culprit/cli.py` calls `load_dotenv()` at import, so any variable in a `.env` file is present before pytest collects tests. If `.env` sets `CULPRIT_TEST_DSN`, a plain `uv run pytest -q` runs the 19 database-gated tests instead of skipping them. With services up this is why the suite reports 617 passes (measured 2026-09-06) rather than the clean-clone 596. If the Postgres container is stopped, the command hangs with no output (killed after 15 minutes on 2026-09-04), compared to 35 seconds for the same suite with the DSN blanked. Either keep `.env` unset when you want the offline-only run, or blank `CULPRIT_TEST_DSN` before pytest.
 
 ## Known gotcha: OTLP JSON encodes int64 fields and timestamps as strings
 
@@ -1169,8 +1171,14 @@ benchmarks among them.
 - **Suite count with live services measured.**
   With `CULPRIT_TEST_DSN="postgresql://postgres:postgres@172.27.120.193:5432/culprit_test"`:
   617 passed, 0 skipped, 1 warning (617 collected) in 66.69s.
-  Offline run with empty `CULPRIT_TEST_DSN`:
+  Offline run with empty `CULPRIT_TEST_DSN`, on this machine, which has the
+  gitignored benchmark datasets prepared:
   598 passed, 19 skipped, 1 warning (617 collected) in 43.77s.
+  A clean clone has no `data/`, so its two benchmark regression tests skip
+  and the same command reports 596 passed, 21 skipped. That is the figure
+  `README.md` states and CI enforces, because it is the one a reader gets;
+  `scripts/check_readme_counts.py` sets `CULPRIT_SKIP_DATASET_TESTS` so it
+  measures the clean-clone counts on any machine.
 
 ## Status
 
