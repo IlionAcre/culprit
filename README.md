@@ -28,7 +28,7 @@ L5 batch clustering      - recurring failure modes surface
 - Clean trace: the pipeline abstained rather than invent a fault.
 - Benchmark validation: on TRAIL, L1 evidenced candidates achieve 36.9% (211/572) precision against a 2.7% (2/73) filler baseline, with 76.7% (585/763) case coverage and 93.8% (121/129) trace-level coverage. On Who&When, L1 evidenced candidates achieve 17.4% (15/86) precision against a 10.3% (73/709) filler baseline, with 8.7% (16/184) coverage, after filtering benign execution_result spans in tool_error.
 
-Offline: 596 tests pass, 21 skipped (617 collected) from a clean clone, which is what CI runs. Preparing the benchmark datasets turns two of those skips into passes. With live Postgres + pgvector: 617 tests pass, measured 2026-09-06. CLI e2e (migrate, ingest, diagnose, show, recluster) verified against real Postgres and Redis.
+Offline: 617 tests pass, 21 skipped (638 collected) from a clean clone, which is what CI runs. Preparing the benchmark datasets turns two of those skips into passes. With live Postgres + pgvector the 19 database-gated tests run as well; that path was last measured green on 2026-09-06, before the CLI tests were added. CLI e2e (migrate, ingest, diagnose, show, recluster) verified against real Postgres and Redis.
 
 ## Cost
 
@@ -106,11 +106,21 @@ set -a && . ./.env && set +a
 uv run alembic upgrade head
 ```
 
-6. Ingest and diagnose a fixture:
+6. Diagnose a fixture. `culprit run` ingests, diagnoses, and prints the verdict in one command, with no queue and no worker in the path:
 ```bash
-uv run culprit ingest tests/fixtures/otlp/otel_genai_sample.json
-uv run culprit diagnose a1b2c3d4e5f60718293a4b5c6d7e8f90
+uv run culprit run tests/fixtures/otlp/otel_genai_sample.json
+```
+
+The fixture is a clean trace, so the honest result is an abstention rather than an invented fault. To re-read a verdict later, or to see every signal behind it:
+```bash
 uv run culprit show a1b2c3d4e5f60718293a4b5c6d7e8f90
+uv run culprit show a1b2c3d4e5f60718293a4b5c6d7e8f90 --verbose
+```
+
+The queued path is there for production, where diagnosis runs out of band. It needs a worker process, and `culprit worker` needs Linux or WSL:
+```bash
+uv run culprit worker          # in a second terminal
+uv run culprit diagnose a1b2c3d4e5f60718293a4b5c6d7e8f90
 uv run culprit recluster
 ```
 

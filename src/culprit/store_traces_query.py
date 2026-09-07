@@ -21,6 +21,46 @@ from culprit.db import ConnFn
 from culprit.schemas import Outcome
 
 
+def step_context(
+    conn_fn: ConnFn, trace_id: str, step_index: int, *, window: int = 1
+) -> list[dict]:
+    """The step at `step_index` plus `window` steps either side of it,
+    ordered by step_index, as plain dicts.
+
+    `culprit show` names a root-cause step by index, which on its own tells
+    a reader nothing: "step 4" is only meaningful next to what step 4 did.
+    This reads the few columns a verdict needs (`kind`, `actor`, `summary`,
+    `duration_ms`) rather than rehydrating whole `Step` models through
+    `read_trace`, because the renderer needs one line per step and the full
+    round trip pulls spans and payloads it would immediately discard.
+
+    Returns `[]` when the trace or the step is absent, so a diagnosis
+    persisted against a pruned or missing trace still renders its verdict
+    without the surrounding context instead of failing.
+    """
+    conn = conn_fn()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT step_index, kind, actor, summary, duration_ms
+            FROM steps
+            WHERE trace_id = %s AND step_index BETWEEN %s AND %s
+            ORDER BY step_index
+            """,
+            (trace_id, step_index - window, step_index + window),
+        )
+        return [
+            {
+                "step_index": row[0],
+                "kind": row[1],
+                "actor": row[2],
+                "summary": row[3],
+                "duration_ms": row[4],
+            }
+            for row in cur.fetchall()
+        ]
+
+
 def nearest_successful(conn_fn: ConnFn, embedding: list[float], k: int) -> list[str]:
     """Successful traces nearest `embedding` by cosine distance
     (`vector <=> vector`), nearest first. `outcome = 'success'` is an

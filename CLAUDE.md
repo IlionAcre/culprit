@@ -659,6 +659,47 @@ problem as detecting an anomalous step sequence in an agent trace.
   `_truncate()`. This is the existing Litmus convention taken further: here
   it also removes a whole class of cross-workstream merge contention.
 
+### CLI surface (Phase 8)
+
+- **`culprit run` exists because `culprit diagnose` is a dead end without a
+  worker.** `diagnose` enqueues; enqueueing succeeds whether or not anything
+  is listening, so a queued job nobody will ever process prints exactly what
+  a job about to run prints. On Windows there is no worker at all (RQ forks,
+  see the gotcha below), which made the documented first-run path
+  unreachable on the machine this was built on. `run` calls
+  `jobs.diagnose_trace_job` in-process, the same function the worker calls,
+  so there are two paths to one implementation rather than two
+  implementations. `diagnose` now also names the worker requirement and
+  points at `run`. *Rejected: making `diagnose` run inline by default* -
+  the queue is the right shape for production, where diagnosis is out of
+  band, and silently changing what a queue command does would be worse than
+  naming the choice.
+
+- **`render.py` is a separate module and reads view dicts, never models.**
+  `cli.py` is already the one module CLAUDE.md allows past the ~200 line
+  ceiling, so Rich rendering does not go in it. Taking `views.py`'s dicts
+  rather than `Diagnosis` keeps that file the single reviewed place deciding
+  what a surface exposes, which is the rule its own docstring states; a
+  renderer reaching into models directly would route around it.
+
+- **`rich` is a direct dependency, not typer's optional extra.** `render.py`
+  imports it, so a typer release that stopped pulling it would break the
+  CLI's read surfaces rather than only its help formatting.
+
+- **`show` prints the shortlist and the signals, not just the verdict.** The
+  architectural claim of this project is that deterministic narrowing beats
+  handing a model the whole trace. Printing only the winning step asks a
+  reader to take that on faith; printing the candidates with their sources
+  (`l1`/`l2`/`filler`) shows how much of the shortlist was real evidence.
+  The `counterfactual` field is displayed for the first time here, and
+  `degraded_layers` is surfaced so a thin diagnosis is never presented as a
+  full one.
+
+- **Colour carries meaning only.** The named step, filler rows dimmed,
+  abstention in yellow because it is a non-answer rather than a failure.
+  Rich drops styling on a non-TTY, so piping stays readable, and the
+  rendering tests assert on content rather than layout.
+
 ## Known gotcha: litellm's Rust-accelerated wheel breaks on Windows
 
 Inherited directly from Litmus, same machine, same failure. `litellm`
@@ -674,7 +715,7 @@ pin.
 
 ## Known gotcha: `.env` silently turns on Postgres-gated tests
 
-`src/culprit/cli.py` calls `load_dotenv()` at import, so any variable in a `.env` file is present before pytest collects tests. If `.env` sets `CULPRIT_TEST_DSN`, a plain `uv run pytest -q` runs the 19 database-gated tests instead of skipping them. With services up this is why the suite reports 617 passes (measured 2026-09-06) rather than the clean-clone 596. If the Postgres container is stopped, the command hangs with no output (killed after 15 minutes on 2026-09-04), compared to 35 seconds for the same suite with the DSN blanked. Either keep `.env` unset when you want the offline-only run, or blank `CULPRIT_TEST_DSN` before pytest.
+`src/culprit/cli.py` calls `load_dotenv()` at import, so any variable in a `.env` file is present before pytest collects tests. If `.env` sets `CULPRIT_TEST_DSN`, a plain `uv run pytest -q` runs the 19 database-gated tests instead of skipping them. With services up this is why the suite reports more passes than the clean-clone 617; that path was last measured at 617 on 2026-09-06, before the CLI rendering tests were added. If the Postgres container is stopped, the command hangs with no output (killed after 15 minutes on 2026-09-04), compared to 35 seconds for the same suite with the DSN blanked. Either keep `.env` unset when you want the offline-only run, or blank `CULPRIT_TEST_DSN` before pytest.
 
 ## Known gotcha: OTLP JSON encodes int64 fields and timestamps as strings
 

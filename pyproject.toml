@@ -16,6 +16,10 @@ dependencies = [
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.2",
     "redis>=5.2.0",
+    # Direct, not left to typer's optional extra: render.py imports rich
+    # itself, so a typer release that stops pulling it would break the CLI's
+    # read surfaces rather than only its help formatting.
+    "rich>=13.0.0",
     "rq>=2.0.0",
     "scikit-learn>=1.6.0",
     "typer>=0.27.0",

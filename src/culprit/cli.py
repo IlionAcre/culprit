@@ -24,6 +24,7 @@ from culprit.config import load_config
 from culprit.jobs import PersistenceNotWiredError, ingest_trace, read_diagnoses_for_trace
 from culprit.logging_config import LOGGER_NAME, configure_logging
 from culprit.queue import enqueue_diagnosis, enqueue_recluster, fetch_job_status
+from culprit.render import render_diagnosis, render_no_diagnoses
 from culprit.views import diagnosis_detail_view, job_status_view
 
 load_dotenv()
@@ -159,7 +160,7 @@ def main(
     logging.getLogger("psycopg.pool").setLevel(logging.CRITICAL)
 
 
-@app.command()
+@app.command(short_help="Ingest one OTLP trace file into Postgres.")
 def ingest(
     trace_file: Path = typer.Argument(..., help="OTLP JSON or protobuf file to ingest"),
 ) -> None:
@@ -182,7 +183,91 @@ def ingest(
     typer.echo(f"Ingested trace {trace_id}")
 
 
-@app.command()
+def _step_context_for(view: dict) -> list[dict] | None:
+    """The root-cause step and its neighbours, or None if they cannot be
+    read. A verdict is still worth printing when the surrounding steps are
+    gone (pruned trace, missing rows, an unreachable pool after the
+    diagnoses were already fetched), so every failure here degrades to None
+    rather than turning a readable answer into an error."""
+    if view.get("root_cause_step_index") is None:
+        return None
+    from culprit.bench import pooled_conn_fn
+    from culprit.store_traces_query import step_context
+
+    close = None
+    try:
+        conn_fn, _recycle, close = pooled_conn_fn()
+        return step_context(conn_fn, view["trace_id"], view["root_cause_step_index"])
+    except Exception:  # noqa: BLE001 - context is a nicety, never the answer
+        return None
+    finally:
+        if close is not None:
+            close()
+
+
+@app.command(
+    short_help="Ingest, diagnose, and print the verdict in one command. No worker needed."
+)
+def run(
+    trace_file: Path | None = typer.Argument(
+        None, help="OTLP JSON or protobuf file to ingest first"
+    ),
+    trace_id: str | None = typer.Option(
+        None, "--trace-id", help="Diagnose a trace that is already ingested"
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Show every signal rather than the first few"
+    ),
+) -> None:
+    """Ingest a trace file (or take one already ingested), diagnose it
+    inline, and print the verdict.
+
+    The same work `culprit diagnose` queues, run in this process instead.
+    That removes Redis and the worker from the path, which matters because
+    `culprit worker` cannot run on Windows at all (RQ forks; see CLAUDE.md),
+    and because a queued job that nobody is listening for looks identical to
+    a job that is about to run. Needs Postgres and GEMINI_API_KEY.
+    """
+    if (trace_file is None) == (trace_id is None):
+        typer.echo("Error: pass either a trace file or --trace-id, not both or neither.")
+        raise typer.Exit(code=1)
+
+    _check_gemini_api_key()
+
+    if trace_file is not None:
+        content_type = (
+            "application/json" if trace_file.suffix == ".json" else "application/x-protobuf"
+        )
+        try:
+            trace_id = ingest_trace(trace_file.read_bytes(), content_type)
+        except PersistenceNotWiredError as e:
+            typer.echo(f"Error: {e}")
+            raise typer.Exit(code=1) from e
+        except _CONNECTION_ERRORS as e:
+            typer.echo(f"Error: {_connection_error_message(e)}")
+            raise typer.Exit(code=1) from e
+        typer.echo(f"Ingested trace {trace_id}")
+
+    from culprit.jobs import diagnose_trace_job
+
+    typer.echo(f"Diagnosing {trace_id}...")
+    try:
+        diagnosis_id = diagnose_trace_job(trace_id)
+    except PersistenceNotWiredError as e:
+        typer.echo(f"Error: {e}")
+        raise typer.Exit(code=1) from e
+    except _CONNECTION_ERRORS as e:
+        typer.echo(f"Error: {_connection_error_message(e)}")
+        raise typer.Exit(code=1) from e
+
+    diagnoses = read_diagnoses_for_trace(trace_id)
+    fresh = [d for d in diagnoses if d.diagnosis_id == diagnosis_id] or diagnoses[-1:]
+    for diagnosis in fresh:
+        view = diagnosis_detail_view(diagnosis)
+        render_diagnosis(view, context=_step_context_for(view), verbose=verbose)
+
+
+@app.command(short_help="Queue a diagnosis for an ingested trace (needs a worker).")
 def diagnose(trace_id: str = typer.Argument(...)) -> None:
     """Enqueue a diagnosis job for an already-ingested trace and print the
     job id. Poll it with `culprit job-status <job_id>` or read the result
@@ -198,11 +283,24 @@ def diagnose(trace_id: str = typer.Argument(...)) -> None:
         extra={"event": "diagnose_enqueued", "trace_id": trace_id, "job_id": job_id},
     )
     typer.echo(f"Enqueued job {job_id} for trace {trace_id}")
+    # Enqueueing succeeds whether or not anything is listening, so without
+    # this the command looks like it worked and then nothing ever happens.
+    typer.echo(
+        "A worker has to be running to pick this up: `culprit worker` "
+        "(Linux or WSL; see CLAUDE.md).\n"
+        f"To diagnose without a worker or Redis: `culprit run --trace-id {trace_id}`."
+    )
 
 
-@app.command()
-def show(trace_id: str = typer.Argument(...)) -> None:
-    """Print every persisted diagnosis for a trace."""
+@app.command(short_help="Print the diagnoses culprit has for a trace.")
+def show(
+    trace_id: str = typer.Argument(...),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Show every signal rather than the first few"
+    ),
+) -> None:
+    """Print every persisted diagnosis for a trace: the verdict, the
+    candidate shortlist L3 adjudicated, and the L1 signals behind it."""
     try:
         diagnoses = read_diagnoses_for_trace(trace_id)
     except PersistenceNotWiredError as e:
@@ -212,20 +310,14 @@ def show(trace_id: str = typer.Argument(...)) -> None:
         typer.echo(f"Error: {_connection_error_message(e)}")
         raise typer.Exit(code=1) from e
     if not diagnoses:
-        typer.echo(f"No diagnoses yet for trace {trace_id}")
+        render_no_diagnoses(trace_id)
         raise typer.Exit(code=1)
     for diagnosis in diagnoses:
         view = diagnosis_detail_view(diagnosis)
-        typer.echo(
-            f"[{view['diagnosis_id']}] step={view['root_cause_step_index']} "
-            f"class={view['failure_class']} "
-            f"confidence={view['calibrated_confidence']:.2f} "
-            f"abstained={view['abstained']}"
-        )
-        typer.echo(f"  {view['rationale']}")
+        render_diagnosis(view, context=_step_context_for(view), verbose=verbose)
 
 
-@app.command("job-status")
+@app.command("job-status", short_help="Poll one queued job.")
 def job_status(job_id: str = typer.Argument(...)) -> None:
     """Poll one job's status (queued/started/finished/failed)."""
     try:
@@ -240,7 +332,7 @@ def job_status(job_id: str = typer.Argument(...)) -> None:
     )
 
 
-@app.command()
+@app.command(short_help="Queue the batch reclustering pass over accumulated diagnoses.")
 def recluster() -> None:
     """Enqueue the scheduled batch reclustering pass. Clustering runs over
     accumulated diagnoses, never per trace, so this is triggered on
@@ -254,7 +346,7 @@ def recluster() -> None:
     typer.echo(f"Enqueued recluster job {job_id}")
 
 
-@app.command()
+@app.command(short_help="Score a benchmark (trail or who_and_when) end to end.")
 def bench(
     benchmark: str = typer.Argument(..., help="Benchmark name: trail or who_and_when"),
     data: Path = typer.Option(..., "--data", help="Merged benchmark JSON file"),
@@ -310,7 +402,7 @@ def bench(
             typer.echo(f"  {trace_id}: {error}")
 
 
-@app.command()
+@app.command(short_help="Run the HTTP service.")
 def serve(
     host: str = typer.Option("0.0.0.0", "--host"),
     port: int = typer.Option(8000, "--port"),
@@ -321,7 +413,7 @@ def serve(
     uvicorn.run("culprit.api:app", host=host, port=port)
 
 
-@app.command()
+@app.command(short_help="Run one queue worker (Linux or WSL only).")
 def worker() -> None:
     """Launch one RQ worker process, pulling from the same queue
     `culprit diagnose`/`culprit recluster` enqueue onto."""
